@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ShaderBridge [DEV]</title>
+<!--
+	Shadertoy → ReShade FX Porter
+	==============================
+	Created by CeeJay.dk and Claude 4.6 Sonnet (Anthropic)
+
+	MIT License
+
+	Copyright (c) 2026 CeeJay.dk
+
+	Permission is hereby granted, free of charge, to any person obtaining a copy
+	of this software and associated documentation files (the "Software"), to deal
+	in the Software without restriction, including without limitation the rights
+	to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+	copies of the Software, and to permit persons to whom the Software is
+	furnished to do so, subject to the following conditions:
+
+	The above copyright notice and this permission notice shall be included in
+	all copies or substantial portions of the Software.
+
+	THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+	IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+	FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+	AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+	LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+	OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+	SOFTWARE.
+-->
+<!-- Critical inline styles to prevent flash of unstyled content -->
+<style>
+body { background: #12151c; color: #c8d0e0; font-family: 'Barlow', sans-serif; margin: 0; }
+header { background: #0d0f14; padding: 10px 24px; display: flex; align-items: center; gap: 24px; border-bottom: 1px solid #1e2433; }
+.logo { font-family: monospace; font-size: 1.1rem; color: #c8d0e0; letter-spacing: 0.08em; }
+.logo .logo-shader { background: linear-gradient(90deg, #ff4081 0%, #ffffff 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+.logo .logo-bridge { color: #00e5ff; }
+.tagline { font-size: 0.72rem; color: #5a6070; letter-spacing: 0.12em; text-transform: uppercase; }
+.header-right { margin-left: auto; display: flex; align-items: center; gap: 24px; }
+.header-opts { display: grid; grid-template-columns: auto auto; gap: 4px 20px; align-items: center; }
+.opt-group { display: flex; align-items: center; gap: 6px; font-size: 0.68rem; color: #5a6070; text-transform: uppercase; letter-spacing: 0.07em; white-space: nowrap; }
+.indicators { display: grid; grid-template-columns: auto auto; gap: 4px; }
+.indicator { font-family: monospace; font-size: 0.58rem; padding: 2px 6px; border: 1px solid #1a1d28; color: #1e2433; background: #0a0c10; text-transform: uppercase; letter-spacing: 0.08em; display: flex; align-items: center; gap: 4px; }
+.main { display: grid; grid-template-columns: 1fr 1fr; }
+.pane-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 16px; border-bottom: 1px solid #1e2433; background: #12151c; }
+.pane-title { font-family: monospace; font-size: 0.72rem; color: #00e5ff; letter-spacing: 0.15em; text-transform: uppercase; }
+.pane-title.out { color: #00e676; }
+.pane-actions { display: flex; gap: 8px; }
+button { font-family: monospace; font-size: 0.72rem; padding: 3px 14px; border: 1px solid #3a4055; background: transparent; color: #5a6070; cursor: pointer; text-transform: uppercase; letter-spacing: 0.08em; }
+textarea { background: #0d0f14; border: none; color: #c8d0e0; font-family: monospace; font-size: 0.8rem; line-height: 1.6; padding: 16px; width: 100%; resize: none; outline: none; white-space: pre; min-height: 200px; }
+.tab-bar { display: flex; background: #0d0f14; border-bottom: 1px solid #1e2433; }
+.tab { font-family: monospace; font-size: 0.65rem; padding: 4px 10px; color: #5a6070; border-right: 1px solid #1e2433; cursor: pointer; text-transform: uppercase; letter-spacing: 0.1em; }
+.channel-bar { display: flex; gap: 10px; padding: 5px 12px; background: #12151c; border-bottom: 1px solid #1e2433; align-items: center; }
+.full-width { grid-column: 1 / -1; }
+.convert-row { display: flex; justify-content: center; padding: 8px; border-top: 1px solid #1e2433; background: #12151c; grid-column: 1 / -1; }
+.convert-btn { font-family: monospace; font-size: 0.85rem; padding: 10px 40px; border: 1px solid #00e5ff; color: #00e5ff; background: transparent; cursor: pointer; letter-spacing: 0.12em; text-transform: uppercase; }
+.log-bar { border-top: 1px solid #1e2433; background: #12151c; grid-column: 1 / -1; }
+.log-bar-header { padding: 6px 16px; font-family: monospace; font-size: 0.65rem; color: #5a6070; text-transform: uppercase; border-bottom: 1px solid #1e2433; }
+</style>
+<link rel="stylesheet" href="shadertoy_porter.css">
+</head>
+<body>
+<div class="scan-line"></div>
+
+<header>
+	<div>
+		<div class="logo"><span class="logo-shader">Shader</span><span class="logo-bridge">Bridge</span></div>
+		<div class="tagline">Shadertoy <span class="tagline-arrow">→</span> ReShade FX &nbsp;·&nbsp; <span id="version-tag">v3.0.0</span></div>
+	</div>
+	<div class="header-right">
+		<div class="header-opts">
+			<div class="opt-group" data-tip="Flip the Y axis of the output coordinates. Required for most Shadertoy shaders since Shadertoy's origin is bottom-left, ReShade's is top-left.">
+				<input type="checkbox" id="opt-yflip" checked>
+				<label for="opt-yflip">Flip Y</label>
+			</div>
+			<div class="opt-group" data-tip="Emit the GLSL compatibility helpers (mod, greaterThan, etc.) into a separate ShadertoyHelper.fxh file instead of inlining them. Useful when porting multiple shaders.">
+				<input type="checkbox" id="opt-fxh">
+				<label for="opt-fxh">Separate .fxh</label>
+			</div>
+			<div class="opt-group" data-tip="Toggle syntax highlighting in both editor panes. Disable if the editor feels slow on very large shaders.">
+				<input type="checkbox" id="opt-highlight" checked onchange="onHighlightToggle()">
+				<label for="opt-highlight">Highlighting</label>
+			</div>
+			<div class="opt-group" data-tip="Visual width of tab characters in the editor panes.">
+				<label for="opt-tabwidth">Tabs</label>
+				<select id="opt-tabwidth" onchange="applyTabWidth()">
+					<option value="2">2</option>
+					<option value="4" selected>4</option>
+					<option value="6">6</option>
+					<option value="8">8</option>
+				</select>
+			</div>
+		</div>
+		<div class="sep"></div>
+		<div class="indicators">
+			<div class="indicator unlit" id="ind-matrix" data-tip="Matrix math detected. GLSL is column-major (M×v), HLSL is row-major (v×M). Review all matrix multiplications and mul() calls in the output manually.">
+				<span class="ind-icon">▦</span><span>Matrix Math</span>
+			</div>
+			<div class="indicator unlit" id="ind-textures" data-tip="Custom texture input detected. You must supply the texture file(s) alongside the .fx file in your ReShade Shaders folder.">
+				<span class="ind-icon">▣</span><span>Custom Textures</span>
+			</div>
+			<div class="indicator unlit" id="ind-audio" data-tip="Audio input detected (iSampleRate / mainSound). ReShade does not support audio input — this shader cannot be fully ported.">
+				<span class="ind-icon">⚠</span><span>Audio Input</span>
+			</div>
+			<div class="indicator unlit" id="ind-multipass" data-tip="Multipass shader detected. Multiple ReShade passes will be emitted, each writing to an intermediate buffer texture.">
+				<span class="ind-icon">◫</span><span>Multipass</span>
+			</div>
+		</div>
+	</div>
+</header>
+
+<div class="main">
+
+	<!-- ── Row 1: pane headers ── -->
+	<div class="pane-header">
+		<span class="pane-title" id="input-pane-title">◈ Shadertoy Input (GLSL)</span>
+		<div class="pane-actions">
+			<input type="file" id="file-input" accept=".glsl,.frag,.txt,.json" style="display:none">
+			<button onclick="document.getElementById('file-input').click()" data-tip="Load a .glsl / .frag / .txt shader file, or a .json export from the Shadertoy Unofficial Plugin (by Patu). JSON exports automatically populate all passes and channel settings.">Load File</button>
+			<button onclick="clearAll()" data-tip="Clear all passes, channels, and output. Resets the tool to its initial state.">Clear</button>
+			<button onclick="loadExample()" class="primary" data-tip="Load a built-in example shader that exercises the most common porter transforms: iResolution, iTime, mix, fract, mod, atan, clamp.">Load Example</button>
+		</div>
+	</div>
+	<div class="pane-header">
+		<span class="pane-title out">◈ ReShade FX Output (.fx)</span>
+		<div class="pane-actions">
+			<button onclick="copyOutput()" class="success-btn" id="copy-btn" data-tip="Copy the converted ReShade FX source to the clipboard.">Copy</button>
+			<button onclick="downloadFx()"  class="primary" data-tip="Download the converted shader as a .fx file. Place it in your ReShade Shaders folder.">Download .fx</button>
+			<button onclick="downloadFxh()" class="secondary" data-tip="Download the GLSL compatibility helper file (ShadertoyHelper.fxh). Only needed when 'Separate .fxh' is enabled. Place it alongside the .fx file.">Download .fxh</button>
+		</div>
+	</div>
+
+	<!-- ── Row 2: pass tab bar (full width) ── -->
+	<div class="tab-bar full-width" id="pass-tab-bar"></div>
+
+	<!-- ── Row 3: channel bar (full width) ── -->
+	<div class="channel-bar full-width" id="pass-channel-bar"></div>
+
+	<!-- ── Row 4: editors ── -->
+	<div class="editor-wrap">
+		<div class="editor-gutter" id="glsl-gutter"></div>
+		<div class="editor-code" id="glsl-code">
+			<textarea id="glsl-input" spellcheck="false" oninput="onPassInput()"></textarea>
+			<div class="editor-highlight" id="glsl-highlight" aria-hidden="true"></div>
+		</div>
+	</div>
+	<div class="editor-wrap">
+		<div class="editor-gutter" id="fx-gutter"></div>
+		<div class="editor-code" id="fx-code">
+			<textarea id="fx-output" spellcheck="false"
+				placeholder="// Converted ReShade FX appears here after clicking Convert."></textarea>
+			<div class="editor-highlight" id="fx-highlight" aria-hidden="true"></div>
+		</div>
+	</div>
+	<div class="editor-hscroll" id="glsl-hscroll"><div class="editor-hscroll-inner" id="glsl-hscroll-inner"></div></div>
+	<div class="editor-hscroll" id="fx-hscroll"><div class="editor-hscroll-inner" id="fx-hscroll-inner"></div></div>
+
+	<div class="convert-row">
+		<button class="convert-btn" onclick="convert()">⟶&nbsp; Convert Shader</button>
+	</div>
+
+	<div class="log-bar">
+		<div class="log-bar-header">Conversion Log</div>
+		<div id="log-entries"></div>
+	</div>
+</div>
+
+<script src="shadertoy_assemble.js"></script>
+<script src="shadertoy_transform.js"></script>
+<script src="shadertoy_json.js"></script>
+<script src="shadertoy_ui.js"></script>
+</body>
+</html>
