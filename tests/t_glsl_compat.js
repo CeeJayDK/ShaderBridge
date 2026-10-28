@@ -389,6 +389,14 @@ hz = hoist('float one = 1.0;\nfloat s0 = sin(one);\nfloat two = 2.0;\nfloat t = 
 check('unrelated globals in between stay, and the order is kept', same(hz.globalInits, ['s0 = sin(one);', 't = s0 + two;']) && /static float two = 2\.0;/.test(hz.src), JSON.stringify(hz.globalInits));
 
 // ── several variables in one global declaration (3.0.33)
+const bits = porter.transformGLSL('void mainImage(out vec4 c, vec2 p) { int k = int(p.x); c = vec4(float((k >> 1) & 1)); }', [], 'Image').src;
+check('constant right shifts and low-bit masks use DX9-compatible helpers', /ST_lowBits\([^;]*ST_shiftRight\(k, 1\)/.test(bits), bits);
+check('modern APIs retain native bitwise operations', /return value >> amount;/.test(bits) && /return value & amount;/.test(bits), bits);
+check('DX9 helpers are guarded and round signed shifts down', /#if __RENDERER__ == 0x9000/.test(bits) && /floor\(float\(value\) \* exp2\(-float\(amount\)\)\)/.test(bits));
+const oddMask = porter.transformGLSL('void mainImage(out vec4 c, vec2 p) { int k = int(p.x); c = vec4(float(k & 5)); }', [], 'Image').src;
+check('unsupported masks are left as native operations', /k & 5/.test(oddMask) && !/ST_lowBits/.test(oddMask));
+const dynamicShift = porter.transformGLSL('void mainImage(out vec4 c, vec2 p) { int k = int(p.x); c = vec4(float(k >> int(p.y))); }', [], 'Image').src;
+check('dynamic shift amounts are not approximated', /k >> int\(p.y\)/.test(dynamicShift) && !/ST_shiftRight/.test(dynamicShift));
 const localScopeSrc = 'vec2 shade(vec2 q)\n{\nvec2 local = sin(q), other = cos(q);\nconst float gain = 0.25;\nreturn (local + other) * gain;\n}\nvoid mainImage(out vec4 color, vec2 pixel) { color = vec4(shade(pixel), 0., 1.); }';
 const localScopeResult = porter.transformGLSL(localScopeSrc, [], 'Image');
 check('unindented function locals are not made static', !/static (?:const )?(?:float2 local|float gain)/.test(localScopeResult.src), localScopeResult.src);

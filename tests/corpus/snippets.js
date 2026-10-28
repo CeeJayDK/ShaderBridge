@@ -1,6 +1,8 @@
 // Small GLSL idioms common in Shadertoy shaders. Each entry: [id, helpers (global code), body of mainImage].
 // Every one is valid GLSL ES 3.00 as Shadertoy accepts it; the porter must turn it into a compiling effect.
 module.exports = [
+	['dx9_shift_and_mask', '', 'int k = int(fragCoord.x); fragColor = vec4(float((k >> 1) & 1), float(k & 3), float((k >> 2) & 7), 1.);', { dx9Budget: 512 }],
+	['dx9_negative_shift_mask', '', 'int k = -int(fragCoord.x) - 1; fragColor = vec4(float(k >> 2), float(k & 3), 0., 1.);', { dx9Budget: 512 }],
 	['macro_matrix_products', 'mat2 BASIS = mat2(1., 2., 3., 4.);\n#define ENERGY(v) dot(BASIS * (v), (v) * BASIS)\n', 'fragColor = vec4(ENERGY(fragCoord * 0.01));'],
 	['macro_matrix_argument', '#define APPLY(m,v) ((m) * (v))\n', 'mat2 basis = mat2(1., 2., 3., 4.); fragColor = vec4(APPLY(basis, fragCoord * 0.01), 0., 1.);'],
 	['locals_without_indent', 'vec2 shade(vec2 q)\n{\nvec2 local = sin(q), other = cos(q);\nconst float gain = 0.25;\nreturn (local + other) * gain;\n}\n', 'fragColor = vec4(shade(fragCoord), 0., 1.);'],

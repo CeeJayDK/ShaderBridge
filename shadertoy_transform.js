@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.44';
+var PORTER_VERSION = '3.0.45';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -903,6 +903,47 @@ function stepD3D9ForLoops(ctx)
 	}
 }
 
+function stepD3D9BitOperations(ctx)
+{
+	// SM3 uses floating-point registers for integers. Powers of two let these operations be
+	// expressed arithmetically for values representable by that profile; modern APIs keep
+	// native integer operations. Other masks and dynamic shifts are deliberately left alone.
+	var helpers = {};
+	function integerLiteral(node)
+	{
+		if (node.kind !== 'num') { return null; }
+		var text = ctx.src.slice(analysis.charStart(node), analysis.charEnd(node));
+		return /^(?:\d+|0[xX][\da-fA-F]+)[uU]?$/.test(text) ? Number(text.replace(/[uU]$/, '')) : null;
+	}
+	var analysis = analyzeSource(ctx.src);
+	var result = rewriteExpressions(ctx.src, function (node, render)
+	{
+		if (node.kind !== 'binary' || (node.op !== '>>' && node.op !== '&')) { return null; }
+		var type = node.left.type;
+		if (type !== 'int' && type !== 'uint') { return null; }
+		var value = integerLiteral(node.right);
+		if (value === null) { return null; }
+		var name;
+		if (node.op === '>>' && value >= 0 && value <= 30) { name = 'ST_shiftRight'; }
+		else if (node.op === '&' && value >= 0 && value <= 65535 && ((value + 1) & value) === 0) { name = 'ST_lowBits'; }
+		else { return null; }
+		helpers[name + ':' + type] = { name: name, type: type };
+		return name + '(' + render(node.left) + ', ' + render(node.right) + ')';
+	});
+	var declarations = Object.keys(helpers).map(function (key)
+	{
+		var h = helpers[key], type = h.type;
+		var body = h.name === 'ST_shiftRight'
+			? type + '(floor(float(value) * exp2(-float(amount))))'
+			: type + '(float(value) - floor(float(value) / float(amount + 1)) * float(amount + 1))';
+		var nativeOp = h.name === 'ST_shiftRight' ? '>>' : '&';
+		return type + ' ' + h.name + '(' + type + ' value, ' + type + ' amount)\n{\n'
+			+ '#if __RENDERER__ == 0x9000\n\treturn ' + body + ';\n'
+			+ '#else\n\treturn value ' + nativeOp + ' amount;\n#endif\n}\n';
+	}).join('\n');
+	ctx.src = declarations ? declarations + '\n' + result.src : result.src;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // The steps, in the order they run. Each step has a name and a function that reads and changes
 // the pass (ctx.src is the source; the other fields are what steps tell each other and what the
@@ -1059,6 +1100,12 @@ var TRANSFORM_STEPS = [
 		run: stepFragCoordDeclaration,
 		after: ['glFragCoord'],
 		why: 'it reads the flag that step sets'
+	},
+	{
+		name: 'd3d9BitOperations',
+		run: stepD3D9BitOperations,
+		after: ['reorderFunctions', 'glslHelpers'],
+		why: 'conditional helper bodies must be inserted after function reordering and expression analysis'
 	},
 	{
 		name: 'd3d9ForLoops',
