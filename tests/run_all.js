@@ -5,7 +5,7 @@
 //   SHADER_JSON_DIR   folder of Shadertoy .json files for the lexer round-trip test (skipped if absent)
 //   RESHADEFX_CLI     reshadefx_cli_fixed, to run the GLSL corpus through the real ReShade compiler (skipped if absent)
 const { spawnSync } = require('child_process');
-const tests = ['t_types.js', 't_analyzer.js', 't_porter_mat.js', 't_flip.js', 't_vflip.js', 't_porter_vec.js', 't_samplers.js', 't_common.js', 't_texelfetch.js', 't_broadcast.js', 't_glsl_compat.js', 't_functions.js', 't_standalone.js', 't_cubemap.js', 't_pipeline.js', 't_loops.js', 't_contrast.js', 'corpus/run.js', 'roundtrip.js'];
+const tests = ['t_types.js', 't_analyzer.js', 't_porter_mat.js', 't_flip.js', 't_vflip.js', 't_porter_vec.js', 't_samplers.js', 't_common.js', 't_texelfetch.js', 't_broadcast.js', 't_glsl_compat.js', 't_functions.js', 't_standalone.js', 't_cubemap.js', 't_pipeline.js', 't_loops.js', 't_frames.js', 't_contrast.js', 'corpus/run.js', 'roundtrip.js'];
 let failed = 0;
 tests.forEach(function (t)
 {

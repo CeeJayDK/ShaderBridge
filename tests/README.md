@@ -20,6 +20,7 @@ Run with Node (no dependencies):
 | `t_functions.js` | ReShade FX has no forward declarations: declarations are removed and callers moved after the functions they call (21) |
 | `t_pipeline.js` | the transform is a list of named steps: the order that matters is declared and checked, and every step proves on its own example that it does something (105) |
 | `t_loops.js` | DX9 for-loop hints, nested and unbraced bodies, explicit attributes, and function reordering (12) |
+| `t_frames.js` | an effect-local frame counter starts at zero after loading, uses separate read/write textures, and runs before shader passes (5) |
 | `t_cubemap.js` | the cubemap helper agrees with the OpenGL cube map table, face order and orientation (28) |
 | `t_contrast.js` | the page is readable: every text colour has enough contrast, and the critical styles agree with the stylesheet (69) |
 | `t_standalone.js` | the .fx includes nothing: it declares its own vertex shader and screen texture and carries its own helpers (16) |

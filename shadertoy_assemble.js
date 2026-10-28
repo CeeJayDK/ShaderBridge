@@ -48,8 +48,8 @@ function buildUniformBlock(usedUniforms) {
 	}
 	if (usedUniforms.has('iFrame')) {
 		sep();
-		lines.push('// iFrame — frame counter');
-		lines.push('uniform int iFrame < source = "framecount"; >;');
+		lines.push('// iFrame starts at zero when this effect first renders, after shader compilation.');
+		lines.push('#define iFrame int(tex2Dfetch(ST_FrameSampler, int2(0, 0)).x)');
 	}
 	if (usedUniforms.has('iDate')) {
 		sep();
@@ -443,6 +443,24 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 	}
 
 	var flipOptionsAt = lines.length; // the flip options are inserted here once the passes are known
+	if (usedUniforms.has('iFrame'))
+	{
+		lines.push('// Effect-local frame counter. ReShade clears new render targets to zero.');
+		lines.push('texture2D ST_FrameState { Width = 1; Height = 1; Format = RGBA32F; };');
+		lines.push('texture2D ST_FramePrevious { Width = 1; Height = 1; Format = RGBA32F; };');
+		lines.push('sampler2D ST_FrameSampler { Texture = ST_FrameState; MinFilter = POINT; MagFilter = POINT; };');
+		lines.push('sampler2D ST_FramePreviousSampler { Texture = ST_FramePrevious; MinFilter = POINT; MagFilter = POINT; };');
+		lines.push('float4 PS_ST_CopyFrame(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target');
+		lines.push('{');
+		lines.push('\treturn tex2Dfetch(ST_FrameSampler, int2(0, 0));');
+		lines.push('}');
+		lines.push('float4 PS_ST_UpdateFrame(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target');
+		lines.push('{');
+		lines.push('\tfloat4 previous = tex2Dfetch(ST_FramePreviousSampler, int2(0, 0));');
+		lines.push('\treturn float4(previous.w > 0.5 ? previous.x + 1.0 : 0.0, 0.0, 0.0, 1.0);');
+		lines.push('}');
+		lines.push('');
+	}
 
 	// ── Detect self-referencing buffer passes ──
 	// A buffer pass self-references when one of its input channels feeds from its own output.
@@ -890,6 +908,21 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 
 	lines.push('technique ' + techniqueName);
 	lines.push('{');
+	if (usedUniforms.has('iFrame'))
+	{
+		lines.push('\tpass ST_CopyFrame');
+		lines.push('\t{');
+		lines.push('\t\tVertexShader = PostProcessVS;');
+		lines.push('\t\tPixelShader = PS_ST_CopyFrame;');
+		lines.push('\t\tRenderTarget = ST_FramePrevious;');
+		lines.push('\t}');
+		lines.push('\tpass ST_UpdateFrame');
+		lines.push('\t{');
+		lines.push('\t\tVertexShader = PostProcessVS;');
+		lines.push('\t\tPixelShader = PS_ST_UpdateFrame;');
+		lines.push('\t\tRenderTarget = ST_FrameState;');
+		lines.push('\t}');
+	}
 
 	transformedPasses.forEach(function (p) {
 		var isBuf = bufIds.indexOf(p.id) !== -1;
