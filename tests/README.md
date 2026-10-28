@@ -18,11 +18,12 @@ Run with Node (no dependencies):
 | `t_common.js` | a Common tab reaches the assembler once per pass; structs, globals and functions that the passes define differently get names of their own, the same ones are defined once (39) |
 | `t_glsl_compat.js` | reserved words, `precision`, static globals, array and diagonal-matrix constructors, comparison functions, switch, macro typing, `inverse` / `outerProduct` / `matrixCompMult`, the texture offset / projection lookups, `gl_FragCoord` as a global, cubemap lookups through `texture()` (254) |
 | `t_functions.js` | ReShade FX has no forward declarations: declarations are removed and callers moved after the functions they call (21) |
-| `t_pipeline.js` | the transform is a list of named steps: the order that matters is declared and checked, and every step proves on its own example that it does something (98) |
+| `t_pipeline.js` | the transform is a list of named steps: the order that matters is declared and checked, and every step proves on its own example that it does something (102) |
+| `t_loops.js` | DX9 for-loop hints, nested and unbraced bodies, explicit attributes, and function reordering (12) |
 | `t_cubemap.js` | the cubemap helper agrees with the OpenGL cube map table, face order and orientation (28) |
 | `t_contrast.js` | the page is readable: every text colour has enough contrast, and the critical styles agree with the stylesheet (69) |
 | `t_standalone.js` | the .fx includes nothing: it declares its own vertex shader and screen texture and carries its own helpers (16) |
-| `corpus/run.js` | 136 small GLSL idioms, each ported and compiled with the real ReShade compiler |
+| `corpus/run.js` | 138 small GLSL idioms, each ported and compiled with the real ReShade compiler; synthetic DX9 loops also check the instruction-slot budget on Windows |
 | `roundtrip.js` | the lexer must reproduce every shader source exactly |
 
 ## Environment
@@ -40,7 +41,14 @@ Run with Node (no dependencies):
 began as a failing snippet. A snippet can carry `{ noDxbc: 'reason' }` to skip the DXBC stage when only vkd3d,
 the stand-in for the Direct3D compiler, objects. Windows always runs the DXBC stage using Microsoft's compiler.
 
+On Windows, `{ dx9Budget: 512 }` also compiles a snippet for shader model 3 and checks its disassembly's
+instruction-slot count. DX9 drivers can reject oversized bytecode even when compilation succeeds.
+
 ## Trying new shaders
+
+Keep real Shadertoy exports and their converted output local, outside the repository and cloud-synced
+folders. Use them to diagnose failures, then add independent synthetic cases to the regression suite.
+Do not upload the exports or their conversions.
 
 `tools/check_shaders.js` ports every Shadertoy `.json` in a folder and compiles each result with the real ReShade
 compiler (the frontend, then every pixel entry point through DXBC), one line per shader. It is the quickest way to

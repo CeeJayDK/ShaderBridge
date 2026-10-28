@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.40';
+var PORTER_VERSION = '3.0.41';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -859,6 +859,32 @@ function stepRestoreComments(ctx)
 	ctx.src = s;
 }
 
+function stepD3D9ForLoops(ctx)
+{
+	// DX9 drivers can reject bytecode that D3DCompile accepts when unrolling exceeds the
+	// device's instruction-slot limit. Keep for loops rolled on DX9; other APIs keep their
+	// usual optimization. Insert these directives after analysis and function reordering,
+	// since conditional code inside a function makes those earlier steps conservative.
+	var tokens = tokenizeSource(ctx.src);
+	var significant = tokens.filter(function (t)
+	{
+		return t.type !== 'ws' && t.type !== 'comment' && t.type !== 'placeholder' && t.type !== 'preproc';
+	});
+	var insertions = [];
+	significant.forEach(function (t, i)
+	{
+		if (t.type !== 'ident' || t.text !== 'for' || !significant[i + 1] || significant[i + 1].text !== '(') { return; }
+		// Respect explicit loop attributes rather than combining [loop] with [unroll].
+		if (i > 0 && significant[i - 1].text === ']') { return; }
+		insertions.push(t.start);
+	});
+	for (var i = insertions.length - 1; i >= 0; i--)
+	{
+		var at = insertions[i];
+		ctx.src = ctx.src.slice(0, at) + '\n#if __RENDERER__ == 0x9000\n[loop]\n#endif\n' + ctx.src.slice(at);
+	}
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // The steps, in the order they run. Each step has a name and a function that reads and changes
 // the pass (ctx.src is the source; the other fields are what steps tell each other and what the
@@ -1015,6 +1041,12 @@ var TRANSFORM_STEPS = [
 		run: stepFragCoordDeclaration,
 		after: ['glFragCoord'],
 		why: 'it reads the flag that step sets'
+	},
+	{
+		name: 'd3d9ForLoops',
+		run: stepD3D9ForLoops,
+		after: ['reorderFunctions', 'glslHelpers', 'loopGradientTex'],
+		why: 'conditional loop hints must follow expression analysis, function reordering and gradient lookup rewriting'
 	},
 	{ name: 'restoreComments', run: stepRestoreComments }
 ];

@@ -39,6 +39,9 @@ const KNOWN = [
 	['glslBuiltins', 'glslHelpers', 'helpers are added for what the finished source calls'],
 	['glFragCoord', 'fragCoordDeclaration', 'it reads the flag that step sets'],
 	['typeNames', 'reorderFunctions', 'the analysis reads HLSL type names'],
+	['reorderFunctions', 'd3d9ForLoops', 'conditional hints must not prevent moving a function before its caller'],
+	['glslHelpers', 'd3d9ForLoops', 'helpers must be inserted before conditional loop hints'],
+	['loopGradientTex', 'd3d9ForLoops', 'gradient lookups must be rewritten before loop hints'],
 	['extractComments', 'splitGlobalDeclarators', 'it moves comment placeholders'],
 	['splitGlobalDeclarators', 'constToStaticConst', 'it looks for one variable per declaration'],
 	['splitGlobalDeclarators', 'constInitialisers', 'it looks for one variable per declaration'],
@@ -128,6 +131,7 @@ check('two passes do not share anything', names2 === 'mainImage_BufA mainImage',
 // (or, for a step that only passes on information, changes the pass). A step that is skipped or never
 // exercised is found here.
 const EXAMPLES = {
+	d3d9ForLoops: 'void mainImage(out vec4 c, vec2 p) { for (int k = 0; k < 4; k++) { p *= 0.5; } c = vec4(p, 0., 1.); }',
 	extractComments: '// a comment\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord)\n{\n\tfragColor = vec4(0.);\n}\n',
 	removeDirectives: '#version 300 es\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord)\n{\n\tfragColor = vec4(0.);\n}\n',
 	precision: 'precision highp float;\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord)\n{\n\tfragColor = vec4(0.);\n}\n',
