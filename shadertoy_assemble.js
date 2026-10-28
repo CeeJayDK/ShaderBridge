@@ -1,18 +1,13 @@
 // ═════════════════════════════════════════════════════════════════════════════
-// HELPER FILE CONTENT  (ShadertoyHelper.fxh)
+// HELPER SOURCE  (GLSL compatibility helpers, written into every generated .fx)
 // ═════════════════════════════════════════════════════════════════════════════
 
-var FXH_CONTENT =
+var HELPER_SOURCE =
 	"// ── Intrinsic remaps ──\n"
 	+ "\n"
 	+ "// GLSL mod(x, y) floors toward -inf; HLSL fmod truncates toward zero.\n"
 	+ "#define mod(x, y) ((x) - (y) * floor((x) / (y)))\n"
-	+ "\n"
-	+ "// ── Component-wise comparison helpers ──\n"
-	+ "float2 greaterThan(float2 a, float2 b) { return float2(a.x > b.x ? 1.0 : 0.0, a.y > b.y ? 1.0 : 0.0); }\n"
-	+ "float3 greaterThan(float3 a, float3 b) { return float3(a.x > b.x ? 1.0 : 0.0, a.y > b.y ? 1.0 : 0.0, a.z > b.z ? 1.0 : 0.0); }\n"
-	+ "float2 lessThan(float2 a, float2 b)    { return float2(a.x < b.x ? 1.0 : 0.0, a.y < b.y ? 1.0 : 0.0); }\n"
-	+ "float3 lessThan(float3 a, float3 b)    { return float3(a.x < b.x ? 1.0 : 0.0, a.y < b.y ? 1.0 : 0.0, a.z < b.z ? 1.0 : 0.0); }\n";
+	+ "\n";
 
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -21,6 +16,12 @@ var FXH_CONTENT =
 
 function buildUniformBlock(usedUniforms) {
 	var lines = [];
+
+	// iChannelTime is stubbed to iTime, so a shader that uses only iChannelTime needs iTime declared too
+	if (usedUniforms.has('iChannelTime') && !usedUniforms.has('iTime')) {
+		usedUniforms = new Set(usedUniforms);
+		usedUniforms.add('iTime');
+	}
 
 	function sep() { if (lines.length) { lines.push(''); } }
 
@@ -60,7 +61,9 @@ function buildUniformBlock(usedUniforms) {
 		lines.push('// iMouse — cursor and click position in pixels');
 		lines.push('uniform float2 iMousePos  < source = "mousepoint"; >;');
 		lines.push('uniform bool   iMouseBtn0 < source = "mousebutton"; keycode = 0; mode = ""; >;');
-		lines.push('#define iMouse float4(iMousePos.x, iMousePos.y, iMouseBtn0 ? iMousePos.x : 0.0, iMouseBtn0 ? iMousePos.y : 0.0)');
+		// ReShade reports the cursor from the top-left; with ST_FLIP_Y the shader works bottom-up, so Y follows it
+		lines.push('#define iMousePosST float2(iMousePos.x, ST_FLIP_Y ? BUFFER_HEIGHT - iMousePos.y : iMousePos.y)');
+		lines.push('#define iMouse float4(iMousePosST, iMouseBtn0 ? iMousePosST : float2(0.0, 0.0))');
 	}
 	if (usedUniforms.has('iChannelTime')) {
 		sep();
@@ -117,7 +120,7 @@ function buildSamplerBlock(channelConfig, usedChannels, bufTexNames, messages, c
 			if (mip) { lines.push('\tMipFilter = LINEAR;'); }
 			lines.push('\tAddressU  = ' + wTok + ';');
 			lines.push('\tAddressV  = ' + wTok + ';');
-			if (vflip) { lines.push('\t// Vflip: negate UV.y at sample site  e.g. tex2D(iChannel' + i + ', float2(uv.x, 1.0 - uv.y))'); }
+			if (vflip) { lines.push('\t// Vflip: V is flipped at the sample sites (switch it with the ST_VFLIP definitions at the top)'); }
 			lines.push('};');
 		}
 		else if (cfg === 'texture') {
@@ -160,6 +163,8 @@ function buildSamplerBlock(channelConfig, usedChannels, bufTexNames, messages, c
 			lines.push('\tWidth  = ' + texW + ';');
 			lines.push('\tHeight = ' + texH + ';');
 			lines.push('\tFormat = ' + texFmt + ';');
+			// A mipmap-filtered sampler only has mips to sample if the texture declares them
+			if (mip) { lines.push('\tMipLevels = ' + (Math.floor(Math.log2(Math.max(texW, texH))) + 1) + ';'); }
 			lines.push('};');
 			lines.push('sampler2D iChannel' + i);
 			lines.push('{');
@@ -169,7 +174,7 @@ function buildSamplerBlock(channelConfig, usedChannels, bufTexNames, messages, c
 			if (mip) { lines.push('\tMipFilter = LINEAR;'); }
 			lines.push('\tAddressU  = ' + wTok + ';');
 			lines.push('\tAddressV  = ' + wTok + ';');
-			if (vflip) { lines.push('\t// Vflip: negate UV.y at sample site  e.g. tex2D(iChannel' + i + ', float2(uv.x, 1.0 - uv.y))'); }
+			if (vflip) { lines.push('\t// Vflip: V is flipped at the sample sites (switch it with the ST_VFLIP definitions at the top)'); }
 			lines.push('};');
 			if (!td) { messages.push({ level: 'warn', text: 'iChannel' + i + ': rename "MyTexture' + i + '.png" and adjust Width/Height/Format to match your texture.' }); }
 		}
@@ -249,12 +254,12 @@ function buildSamplerBlock(channelConfig, usedChannels, bufTexNames, messages, c
 			if (mip) { lines.push('\tMipFilter = LINEAR;'); }
 			lines.push('\tAddressU  = ' + wTok + ';');
 			lines.push('\tAddressV  = ' + wTok + ';');
-			if (vflip) { lines.push('\t// Vflip: negate UV.y at sample site  e.g. tex2D(iChannel' + i + ', float2(uv.x, 1.0 - uv.y))'); }
+			if (vflip) { lines.push('\t// Vflip: not applied to buffers; they keep Shadertoy\'s row order, so no flip is needed'); }
 			lines.push('};');
 		}
 		else {
-			lines.push('// iChannel' + i + ' referenced but mapped to None — add sampler manually.');
-			messages.push({ level: 'warn', text: 'iChannel' + i + ' referenced but mapped to None.' });
+			lines.push('// iChannel' + i + ' is not mapped to anything: its lookups read as zero (black).');
+			messages.push({ level: 'warn', text: 'iChannel' + i + ' is referenced but mapped to None: its lookups read as zero (black).' });
 		}
 	}
 
@@ -362,7 +367,7 @@ function buildChannelResolution(channelConfig, channelNames, bufTexNames, usedCh
 
 // transformedPasses: array of { id, src, coordVar, usedUniforms, channels[4], format }
 // shaderInfo (optional): { id, name, username, description, url }
-function assembleFxFile(transformedPasses, flipY, separateFxh, messages, shaderInfo) {
+function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 	var lines = [];
 
 	// Merge usedUniforms across all passes
@@ -413,16 +418,20 @@ function assembleFxFile(transformedPasses, flipY, separateFxh, messages, shaderI
 	lines.push('*/');
 	lines.push('');
 
-	if (separateFxh) {
-		lines.push('#include "ShadertoyHelper.fxh"');
-	}
-	else {
-		lines.push(FXH_CONTENT);
-	}
+	lines.push(HELPER_SOURCE);
 	lines.push('');
 
-	lines.push('// ── Includes ──');
-	lines.push('#include "ReShade.fxh"');
+	// The effect includes nothing, so it works wherever it is put. It declares what it needs of what
+	// ReShade.fxh would have given it: the fullscreen vertex shader (the same one) and, if a channel
+	// reads the screen, the back buffer texture.
+	lines.push('// ── Fullscreen vertex shader ──');
+	lines.push('void PostProcessVS(in uint id : SV_VertexID, out float4 position : SV_Position, out float2 texcoord : TEXCOORD)');
+	lines.push('{');
+	lines.push('\ttexcoord.x = (id == 2) ? 2.0 : 0.0;');
+	lines.push('\ttexcoord.y = (id == 1) ? 2.0 : 0.0;');
+	lines.push('\tposition = float4(texcoord * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);');
+	lines.push('}');
+	lines.push('//@ST_BACKBUFFER@');
 	lines.push('');
 
 	// ── Uniforms ──
@@ -432,6 +441,8 @@ function assembleFxFile(transformedPasses, flipY, separateFxh, messages, shaderI
 		lines.push(uniformBlock);
 		lines.push('');
 	}
+
+	var flipOptionsAt = lines.length; // the flip options are inserted here once the passes are known
 
 	// ── Detect self-referencing buffer passes ──
 	// A buffer pass self-references when one of its input channels feeds from its own output.
@@ -484,8 +495,16 @@ function assembleFxFile(transformedPasses, flipY, separateFxh, messages, shaderI
 	}
 
 	// ── Per-pass shader bodies + PS entries ──
-	var declaredSamplers = {}; // track sampler names already emitted
-	var declaredFunctions = {}; // track top-level function signatures already emitted
+	var declaredResources = {}; // texture and sampler declarations already emitted, by name
+	var declaredFunctions = {};
+	var declaredGlobals = {};
+	var declaredStructs = {};
+	var emittedFlipHelpers = { v2: false, v4: false, dir: false, fetch: false };
+	var flipOptionLines = [];
+	var flipOptionsHaveVflip = false;
+	flipOptionLines.push('// ── Flip options (shown in ReShade\'s preprocessor definitions) ──');
+	flipOptionLines.push('// ST_FLIP_Y: 1 = Shadertoy orientation on screen (y up), 0 = ReShade orientation (y down)');
+	flipOptionLines.push('#ifndef ST_FLIP_Y', '\t#define ST_FLIP_Y ' + (flipY ? 1 : 0), '#endif'); // track top-level function signatures already emitted
 
 	// Extract top-level function signatures from HLSL source.
 	// Returns array of { sig, start, end } where start/end delimit the full definition.
@@ -531,27 +550,55 @@ function assembleFxFile(transformedPasses, flipY, separateFxh, messages, shaderI
 		return fns;
 	}
 
-	// Remove function definitions from src whose signatures are in seenSet.
-	// Also registers newly seen signatures into seenSet.
-	function deduplicatePassFunctions(src, seenSet, messages, passLabel) {
+	// A function is compared with the one of the same signature in an earlier pass:
+	//   the same text  → an exact repeat (a function from the Common tab, say): drop it
+	//   another text   → a different function that happens to have the same name: give it a name of its own in this pass
+	// Each Shadertoy pass is its own program, so  df()  in one pass and  df()  in another are two functions even though
+	// their signatures are the same; keeping only the first would give the second pass the wrong function without a word.
+	// Renaming a function changes every function that calls it, so that has to be repeated until nothing new clashes.
+	// Within one pass, repeated signatures are alternatives selected by #if / #else and must all be kept.
+	function normaliseFunctionText(text) {
+		return text.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
+	}
+
+	function deduplicatePassFunctions(src, seen, passTag, messages, passLabel) {
+		var renames = {};
+		for (var round = 0; round < 100 && passTag; round++) {
+			var renameNow = {};
+			extractTopLevelFunctions(src).forEach(function (fn) {
+				var name = fn.sig.slice(0, fn.sig.indexOf('('));
+				if (renames[name] !== undefined || renameNow[name] !== undefined) { return; }
+				if (seen[fn.sig] !== undefined && seen[fn.sig] !== normaliseFunctionText(src.slice(fn.start, fn.end))) { renameNow[name] = name + passTag; }
+			});
+			var names = Object.keys(renameNow);
+			if (names.length === 0) { break; }
+			names.forEach(function (n) {
+				renames[n] = renameNow[n];
+				messages.push({ level: 'info', text: '[' + passLabel + '] function \'' + n + '\' is not the same as the one in an earlier pass; this pass uses ' + renameNow[n] + '.' });
+			});
+			src = renameNamesEverywhere(src, renameNow);
+		}
+
 		var fns = extractTopLevelFunctions(src);
 		var removals = []; // { start, end } sorted descending
+		var newSigs = [];
 		fns.forEach(function (fn) {
-			if (seenSet[fn.sig]) {
+			var text = normaliseFunctionText(src.slice(fn.start, fn.end));
+			if (seen[fn.sig] !== undefined) {
 				removals.push({ start: fn.start, end: fn.end });
 			}
 			else {
-				seenSet[fn.sig] = true;
+				newSigs.push({ sig: fn.sig, text: text });
 			}
 		});
+		newSigs.forEach(function (n) { seen[n.sig] = n.text; });
 
-		if (removals.length === 0) { return src; }
+		if (removals.length === 0) { return { src: src, renames: renames }; }
 
 		// Sort descending so we can splice without index shifting
 		removals.sort(function (a, b) { return b.start - a.start; });
 		var result = src;
 		removals.forEach(function (r) {
-			// Also remove any preceding comment line(s)
 			var before = result.slice(0, r.start);
 			var after = result.slice(r.end);
 			// Trim trailing newlines from before and leading newlines from after
@@ -564,7 +611,148 @@ function assembleFxFile(transformedPasses, flipY, separateFxh, messages, shaderI
 			level: 'info', text:
 				'[' + passLabel + '] ' + removals.length + ' duplicate function definition(s) removed (already declared in an earlier pass).'
 		});
+		return { src: result, renames: renames };
+	}
+
+	// Sampler and texture names come from the channel index (iChannel0), so different passes
+	// often use the same name for different things. For each declaration block of a pass:
+	//   - new name                         → emit it
+	//   - same name, identical content     → an exact repeat of an earlier pass, drop it
+	//   - same name, different content     → a clash: give it a pass-specific name
+	// renames collects old → new names so the pass's source can be updated to match.
+	function declarePassResources(blockText, registry, passTag, renames, messages, passLabel) {
+		var headerRe = /^(texture2D|texture3D|sampler2D|sampler3D)\s+(\w+)/;
+		var out = [];
+		var lead = [];
+		var current = null;
+		blockText.split('\n').forEach(function (line) {
+			if (current) {
+				current.push(line);
+				if (line.trim() === '};') {
+					finish(current);
+					current = null;
+				}
+				return;
+			}
+			if (headerRe.test(line)) { current = [line]; return; }
+			if (/^\/\//.test(line)) { lead.push(line); return; }
+			out.push(line);
+		});
+
+		function finish(block) {
+			var text = renameIdentifiers(block.join('\n'), renames);
+			var name = headerRe.exec(text)[2];
+			if (registry[name] === undefined) {
+				registry[name] = text;
+			}
+			else if (registry[name] === text) {
+				lead = [];
+				return; // exact repeat of an earlier pass
+			}
+			else {
+				var unique = name + '_' + passTag;
+				// the block was already renamed by earlier clashes in this pass; track the original name
+				var original = Object.keys(renames).filter(function (k) { return renames[k] === name; })[0] || name;
+				renames[original] = unique;
+				text = renameIdentifiers(text, (function () { var m = {}; m[name] = unique; return m; }()));
+				registry[unique] = text;
+				messages.push({ level: 'info', text: '[' + passLabel + '] ' + original + ' is declared differently in an earlier pass; this pass uses ' + unique + '.' });
+			}
+			lead.forEach(function (l) { out.push(l); });
+			lead = [];
+			text.split('\n').forEach(function (l) { out.push(l); });
+		}
+		return out.join('\n');
+	}
+
+	// Remove struct definitions that an earlier pass already defined identically (typically the
+	// Common tab, which every pass includes). A same-named struct that differs cannot be merged: warn.
+	function deduplicatePassStructs(src, seenStructs, messages, passLabel) {
+		var removed = 0;
+		var newStructs = {};
+		var result = src.replace(structDefinitionPattern(), function (match, name) {
+			var key = match.replace(/\s+/g, ' ').trim();
+			// Only compare against EARLIER passes. Within one pass, repeated definitions are
+			// alternatives selected by #if / #else and must all be kept.
+			if (seenStructs[name] === undefined) { if (newStructs[name] === undefined) { newStructs[name] = key; } return match; }
+			if (seenStructs[name] === key) { removed++; return ''; }
+			messages.push({ level: 'warn', text: '[' + passLabel + '] struct \'' + name + '\' is defined differently in an earlier pass; both share one name here and will conflict.' });
+			return match;
+		});
+		Object.keys(newStructs).forEach(function (name) { seenStructs[name] = newStructs[name]; });
+		if (removed > 0) {
+			messages.push({ level: 'info', text: '[' + passLabel + '] ' + removed + ' duplicate struct definition(s) removed (already defined in an earlier pass).' });
+		}
 		return result;
+	}
+
+	// Remove single-line file-scope variable declarations that an earlier pass already declared
+	// identically. Each Shadertoy pass is its own program, so the same global (res, mouse, ...)
+	// is often declared in several. A same-named global that differs cannot be merged: warn.
+	function deduplicatePassGlobals(src, seenGlobals, messages, passLabel) {
+		var removed = 0;
+		var newGlobals = {};
+		var result = src.replace(/^(static[ ]+(?:const[ ]+)?(?:float[234x]*|int[234]?|uint[234]?|bool)[ ]+(\w+)[ ]*(?:=[^;\n]*)?;)[ \t]*(?:\/\/[^\n]*)?(?:\n|$)/gm,
+			function (match, decl, name) {
+				var key = decl.replace(/\s+/g, ' ').trim();
+				// Only compare against EARLIER passes. Within one pass, repeated declarations are
+				// alternatives selected by #if / #else and must all be kept.
+				if (seenGlobals[name] === undefined) { if (newGlobals[name] === undefined) { newGlobals[name] = key; } return match; }
+				if (seenGlobals[name] === key) { removed++; return ''; }
+				messages.push({ level: 'warn', text: '[' + passLabel + '] global \'' + name + '\' is declared differently in an earlier pass; both share one name here and will conflict.' });
+				return match;
+			});
+		Object.keys(newGlobals).forEach(function (name) { seenGlobals[name] = newGlobals[name]; });
+		if (removed > 0)
+		{
+			messages.push({ level: 'info', text: '[' + passLabel + '] ' + removed + ' duplicate global declaration(s) removed (already declared in an earlier pass).' });
+		}
+		return result;
+	}
+
+	// A struct or a global that an earlier pass declared differently gets a name of its own in this pass, the
+	// way a function does (deduplicatePassFunctions). Each Shadertoy pass is its own program, so  float camRot = 1.4;
+	// in one pass and  float camRot = 1.5;  in another are two variables, and two different  struct RayHit  are two
+	// types, but here they would be one name. Every use in the pass is renamed, including the ones inside #define
+	// lines and the assignments hoisted to the pass entry point. A struct or global that is declared the same in
+	// the passes is not touched here: deduplicatePassStructs and deduplicatePassGlobals drop the repeat.
+	function renameConflictingNames(src, seenStructs, seenGlobals, passTag, passLabel, messages) {
+		var renames = {};
+		if (!passTag) { return { src: src, renames: renames }; }
+		function note(kind, name) {
+			renames[name] = name + passTag;
+			messages.push({ level: 'info', text: '[' + passLabel + '] ' + kind + ' \'' + name + '\' is declared differently in an earlier pass; this pass uses ' + renames[name] + '.' });
+		}
+		src.replace(structDefinitionPattern(), function (match, name) {
+			var key = match.replace(/\s+/g, ' ').trim();
+			if (seenStructs[name] !== undefined && seenStructs[name] !== key && renames[name] === undefined) { note('struct', name); }
+			return match;
+		});
+		src.replace(/^(static[ ]+(?:const[ ]+)?(?:float[234x]*|int[234]?|uint[234]?|bool)[ ]+(\w+)[ ]*(?:=[^;\n]*)?;)[ \t]*(?:\/\/[^\n]*)?(?:\n|$)/gm,
+			function (match, decl, name) {
+				var key = decl.replace(/\s+/g, ' ').trim();
+				if (seenGlobals[name] !== undefined && seenGlobals[name] !== key && renames[name] === undefined) { note('global', name); }
+				return match;
+			});
+		if (Object.keys(renames).length === 0) { return { src: src, renames: renames }; }
+		return { src: renameNamesEverywhere(src, renames), renames: renames };
+	}
+
+	// renameIdentifiers leaves a #define line alone; here the body of a macro has to follow, but not its name
+	function renameNamesEverywhere(src, renames) {
+		return tokenizeSource(src).map(function (token) {
+			if (token.type === 'ident') { return Object.prototype.hasOwnProperty.call(renames, token.text) ? renames[token.text] : token.text; }
+			if (token.type === 'preproc') {
+				return token.text.replace(/^(#\s*define\s+\w+)([\s\S]*)$/, function (all, head, rest) { return head + renameIdentifiers(rest, renames); });
+			}
+			return token.text;
+		}).join('');
+	}
+
+	// A struct definition wherever it stands and however its braces are laid out:  struct S { ... };  or the brace on
+	// the next line, indented or not. Only the part between the braces cannot contain braces.
+	function structDefinitionPattern() {
+		return /^[ \t]*struct\s+(\w+)\s*\{[^{}]*\}\s*;[ \t]*(?:\n|$)/gm;
 	}
 
 	transformedPasses.forEach(function (p, pi) {
@@ -588,21 +776,39 @@ function assembleFxFile(transformedPasses, flipY, separateFxh, messages, shaderI
 
 		var usedChannels = detectChannelUse(p.src);
 		var channelAttribs = { filters: p.filters || [], wraps: p.wraps || [], vflips: p.vflips || [] };
-		var samplerLines = buildSamplerBlock(effectiveChannels, usedChannels, extBufTexNames, messages, channelAttribs, p.channelNames || []).split('\n');
-		var filteredSamplerLines = [];
-		var currentSamplerName = null;
-		var skipBlock = false;
-		samplerLines.forEach(function (line) {
-			var m = line.match(/^sampler[23]D\s+(\w+)/);
-			if (m) {
-				currentSamplerName = m[1];
-				skipBlock = !!declaredSamplers[currentSamplerName];
-				if (!skipBlock) { declaredSamplers[currentSamplerName] = true; }
+
+		// Texture and backbuffer channels can have V flipped at their sample sites. Each gets a
+		// preprocessor definition (shown in ReShade's UI) whose default is the Vflip setting.
+		var passSrc = p.src;
+		var flipHelperLines = [];
+		var samplerFlags = {};
+		var passTag = transformedPasses.length > 1 ? '_' + (isBuf ? bufLabels[p.id] : 'Image').toUpperCase().replace(/[^A-Z0-9]/g, '') : '';
+		usedChannels.forEach(function (ci) {
+			var kind = effectiveChannels[ci];
+			if (kind !== 'texture' && kind !== 'backbuffer') { return; }
+			var macro = 'ST_VFLIP' + passTag + '_CH' + ci;
+			samplerFlags['iChannel' + ci] = macro;
+			if (!flipOptionsHaveVflip) {
+				flipOptionsHaveVflip = true;
+				flipOptionLines.push('// ST_VFLIP_*: 1 = flip V of that texture channel at its sample sites (Shadertoy\'s Vflip)');
 			}
-			if (!skipBlock) { filteredSamplerLines.push(line); }
-			if (line.trim() === '};') { skipBlock = false; currentSamplerName = null; }
+			flipOptionLines.push('#ifndef ' + macro, '\t#define ' + macro + ' ' + (channelAttribs.vflips[ci] ? 1 : 0), '#endif');
 		});
-		var samplerBlock = filteredSamplerLines.join('\n').trim();
+		if (Object.keys(samplerFlags).length) {
+			var flipResult = rewriteTextureVFlip(passSrc, samplerFlags);
+			passSrc = flipResult.src;
+			flipResult.warnings.forEach(function (w) { messages.push({ level: 'warn', text: '[' + (isBuf ? bufLabels[p.id] : 'Image') + '] ' + w }); });
+			if (flipResult.helpers.v2 && !emittedFlipHelpers.v2) { emittedFlipHelpers.v2 = true; flipHelperLines.push('float2 ST_flipV(float2 uv, bool flip)', '{', '\treturn float2(uv.x, flip ? 1.0 - uv.y : uv.y);', '}', ''); }
+			if (flipResult.helpers.v4 && !emittedFlipHelpers.v4) { emittedFlipHelpers.v4 = true; flipHelperLines.push('float4 ST_flipV4(float4 coord, bool flip)', '{', '\treturn float4(coord.x, flip ? 1.0 - coord.y : coord.y, coord.z, coord.w);', '}', ''); }
+			if (flipResult.helpers.dir && !emittedFlipHelpers.dir) { emittedFlipHelpers.dir = true; flipHelperLines.push('float2 ST_flipDir(float2 d, bool flip)', '{', '\treturn float2(d.x, flip ? -d.y : d.y);', '}', ''); }
+			if (flipResult.helpers.fetch && !emittedFlipHelpers.fetch) { emittedFlipHelpers.fetch = true; flipHelperLines.push('int2 ST_flipFetch(int2 coord, int2 size, bool flip)', '{', '\treturn int2(coord.x, flip ? size.y - 1 - coord.y : coord.y);', '}', ''); }
+			if (flipHelperLines.length) { flipHelperLines.unshift('// V flip for textures with a Vflip option: Shadertoy has v = 0 at the bottom row of the image, ReShade at the top'); }
+		}
+		var passRenames = {};
+		var samplerBlock = declarePassResources(
+			buildSamplerBlock(effectiveChannels, usedChannels, extBufTexNames, messages, channelAttribs, p.channelNames || []),
+			declaredResources, (isBuf ? bufLabels[p.id] : 'Image'), passRenames, messages, (isBuf ? bufLabels[p.id] : 'Image')).trim();
+		if (Object.keys(passRenames).length) { passSrc = renameIdentifiers(passSrc, passRenames); }
 
 		if (samplerBlock) {
 			lines.push('// ── Samplers — ' + (isBuf ? bufLabels[p.id] : 'Image') + ' ──');
@@ -619,31 +825,69 @@ function assembleFxFile(transformedPasses, flipY, separateFxh, messages, shaderI
 			lines.push('');
 		}
 
+		flipHelperLines.forEach(function (l) { lines.push(l); });
 		lines.push('// ── Shader body' + (transformedPasses.length > 1 ? ' — ' + (isBuf ? bufLabels[p.id] : 'Image') : '') + ' ──');
 		var passLabel = isBuf ? bufLabels[p.id] : 'Image';
-		var dedupedSrc = deduplicatePassFunctions(p.src.trim(), declaredFunctions, messages, passLabel);
+		var globalRename = renameConflictingNames(passSrc.trim(), declaredStructs, declaredGlobals, passTag, passLabel, messages);
+		var dedupedSrc = deduplicatePassStructs(globalRename.src, declaredStructs, messages, passLabel);
+		var functionResult = deduplicatePassFunctions(dedupedSrc, declaredFunctions, passTag, messages, passLabel);
+		dedupedSrc = functionResult.src;
+		var passRenames = {};
+		[globalRename.renames, functionResult.renames].forEach(function (map) { Object.keys(map).forEach(function (k) { passRenames[k] = map[k]; }); });
+		var passInits = (p.globalInits || []).map(function (init) { return Object.keys(passRenames).length ? renameIdentifiers(init, passRenames) : init; });
+		dedupedSrc = deduplicatePassGlobals(dedupedSrc, declaredGlobals, messages, passLabel);
 		lines.push(dedupedSrc);
 		lines.push('');
 
 		// PS entry
-		if (flipY) {
+		// ST_FLIP_Y turns ReShade's top-down SV_Position into Shadertoy's bottom-up fragCoord. Only the
+		// pass that renders to the screen needs that. Buffer passes keep the row order that
+		// Shadertoy has in memory (fragCoord.y == row), so a buffer that stores data by row, or feeds
+		// back into itself, reads back at the same coordinates it was written to.
+		if (!isBuf) {
 			lines.push('void ' + psName + '(float4 vpos : SV_Position, float2 texcoord : TEXCOORD, out float4 output : SV_Target)');
 			lines.push('{');
-			lines.push('\tfloat2 ' + coordVar + ' = float2(vpos.x, iResolution.y - vpos.y);');
+			lines.push('\tfloat2 ' + coordVar + ' = float2(vpos.x, ST_FLIP_Y ? BUFFER_HEIGHT - vpos.y : vpos.y);');
+			if (/\bST_FragCoord\b/.test(p.src)) { lines.push('\tST_FragCoord = float4(' + coordVar + ', 0.0, 1.0);'); }
+			passInits.forEach(function (init) { lines.push('\t' + init); });
 			lines.push('\t' + mainImgName + '(' + coordVar + ', output);');
 			lines.push('}');
 		}
 		else {
 			lines.push('void ' + psName + '(float4 vpos : SV_Position, float2 texcoord : TEXCOORD, out float4 output : SV_Target)');
 			lines.push('{');
+			if (/\bST_FragCoord\b/.test(p.src)) { lines.push('\tST_FragCoord = float4(vpos.xy, 0.0, 1.0);'); }
+			passInits.forEach(function (init) { lines.push('\t' + init); });
 			lines.push('\t' + mainImgName + '(vpos.xy, output);');
 			lines.push('}');
 		}
 		lines.push('');
+
+		// Each Shadertoy pass is its own program, but here they share one preprocessor.
+		// Undefine this pass's macros so they do not collide with the next pass's.
+		if (transformedPasses.length > 1)
+		{
+			var passMacros = [];
+			var macroRe = /^[ \t]*#[ \t]*define[ \t]+(\w+)/gm;
+			var macroMatch;
+			while ((macroMatch = macroRe.exec(p.src)) !== null)
+			{
+				if (passMacros.indexOf(macroMatch[1]) === -1) { passMacros.push(macroMatch[1]); }
+			}
+			if (passMacros.length)
+			{
+				lines.push('// ── Macros local to ' + passLabel + ' ──');
+				passMacros.forEach(function (name) { lines.push('#undef ' + name); });
+				lines.push('');
+			}
+		}
 	});
 
 	// ── Technique ──
 	lines.push('// ── Technique ──');
+	flipOptionLines.push('');
+	lines.splice.apply(lines, [flipOptionsAt, 0].concat(flipOptionLines));
+
 	lines.push('technique ' + techniqueName);
 	lines.push('{');
 
@@ -678,5 +922,13 @@ function assembleFxFile(transformedPasses, flipY, separateFxh, messages, shaderI
 
 	lines.push('}');
 
-	return lines.join('\n').replace(/\n{3,}/g, '\n\n') + '\n';
+	var text = lines.join('\n');
+	if (/ReShade::BackBufferTex/.test(text)) {
+		text = text.replace(/ReShade::BackBufferTex/g, 'ST_BackBufferTex');
+		text = text.replace('//@ST_BACKBUFFER@', '\n// The screen\ntexture ST_BackBufferTex : COLOR;');
+	}
+	else {
+		text = text.replace('//@ST_BACKBUFFER@\n', '');
+	}
+	return text.replace(/\n{3,}/g, '\n\n') + '\n';
 }

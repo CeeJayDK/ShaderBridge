@@ -9,7 +9,8 @@
 	--accent2:  #ff4081;
 	--muted:    #3a4055;
 	--text:     #c8d0e0;
-	--text-dim: #5a6070;
+	--text-dim: #8590a6;
+	--text-faint: #727b8f;
 	--success:  #00e676;
 	--warn:     #ffab40;
 	--mono:     'Share Tech Mono', monospace;
@@ -202,13 +203,13 @@ header::after
 	text-transform: uppercase;
 	padding:        2px 6px;
 	border:         1px solid #1a1d28;
-	color:          #1e2433;
+	color:          var(--text-faint);
 	background:     #0a0c10;
 	transition:     all 0.2s;
 	user-select:    none;
 }
 .indicator .ind-icon { font-size: 0.62rem; }
-.indicator.unlit     { color: #1e2433; border-color: #1a1d28; }
+.indicator.unlit     { color: var(--text-faint); border-color: #1a1d28; }
 .indicator.lit-amber { color: var(--warn); border-color: var(--warn); box-shadow: 0 0 6px rgba(255,171,64,0.25); }
 .indicator.lit-red
 {
@@ -288,7 +289,7 @@ textarea
 	tab-size:    4;
 	white-space: pre;
 }
-textarea::placeholder { color: var(--muted); }
+textarea::placeholder { color: var(--text-dim); }
 
 /* ── Log ── */
 .log-bar
@@ -394,7 +395,7 @@ textarea::placeholder { color: var(--muted); }
 	line-height:    1.6;
 	text-align:     right;
 	color:          var(--text-dim);
-	opacity:        0.35;
+	opacity:        0.7;
 	background:     var(--bg);
 	user-select:    none;
 	pointer-events: none;
@@ -468,7 +469,7 @@ body.no-highlight .editor-highlight          { visibility: hidden; }
 body.no-highlight .editor-code textarea      { color: var(--text); }
 
 /* Syntax token colors */
-.hl-comment   { color: #4a5268; }
+.hl-comment   { color: #7f8aa0; }
 .hl-type      { color: #c792ea; }
 .hl-keyword   { color: #ff79c6; }
 .hl-intrinsic { color: #4ec9b0; }
@@ -526,7 +527,7 @@ body.no-highlight .editor-code textarea      { color: var(--text); }
 }
 .tab:hover         { color: var(--text); }
 .tab.active        { color: var(--accent); border-bottom: 2px solid var(--accent); background: var(--panel); }
-.tab.empty         { color: var(--muted); }
+.tab.empty         { color: var(--text-faint); }
 .tab.empty.active  { color: var(--accent); }
 
 /* Channel tabs use accent2 */
@@ -584,7 +585,7 @@ body.no-highlight .editor-code textarea      { color: var(--text); }
 	outline:             none;
 	appearance:          none;
 	-webkit-appearance:  none;
-	background-image:    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%235a6070'/%3E%3C/svg%3E");
+	background-image:    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%238590a6'/%3E%3C/svg%3E");
 	background-repeat:   no-repeat;
 	background-position: right 4px center;
 }
@@ -633,7 +634,7 @@ body.no-highlight .editor-code textarea      { color: var(--text); }
 {
 	font-family:    var(--mono);
 	font-size:      0.60rem;
-	color:          var(--muted);
+	color:          var(--text-dim);
 	letter-spacing: 0.05em;
 	white-space:    nowrap;
 	padding:        3px 8px 3px 0;
@@ -656,7 +657,7 @@ body.no-highlight .editor-code textarea      { color: var(--text); }
 	transition:          color 0.12s, border-color 0.12s;
 	appearance:          none;
 	-webkit-appearance:  none;
-	background-image:    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%235a6070'/%3E%3C/svg%3E");
+	background-image:    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%238590a6'/%3E%3C/svg%3E");
 	background-repeat:   no-repeat;
 	background-position: right 4px center;
 }

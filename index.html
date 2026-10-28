@@ -38,27 +38,27 @@ header { background: #0d0f14; padding: 10px 24px; display: flex; align-items: ce
 .logo { font-family: monospace; font-size: 1.1rem; color: #c8d0e0; letter-spacing: 0.08em; }
 .logo .logo-shader { background: linear-gradient(90deg, #ff4081 0%, #ffffff 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
 .logo .logo-bridge { color: #00e5ff; }
-.tagline { font-size: 0.72rem; color: #5a6070; letter-spacing: 0.12em; text-transform: uppercase; }
+.tagline { font-size: 0.72rem; color: #8590a6; letter-spacing: 0.12em; text-transform: uppercase; }
 .header-right { margin-left: auto; display: flex; align-items: center; gap: 24px; }
 .header-opts { display: grid; grid-template-columns: auto auto; gap: 4px 20px; align-items: center; }
-.opt-group { display: flex; align-items: center; gap: 6px; font-size: 0.68rem; color: #5a6070; text-transform: uppercase; letter-spacing: 0.07em; white-space: nowrap; }
+.opt-group { display: flex; align-items: center; gap: 6px; font-size: 0.68rem; color: #8590a6; text-transform: uppercase; letter-spacing: 0.07em; white-space: nowrap; }
 .indicators { display: grid; grid-template-columns: auto auto; gap: 4px; }
-.indicator { font-family: monospace; font-size: 0.58rem; padding: 2px 6px; border: 1px solid #1a1d28; color: #1e2433; background: #0a0c10; text-transform: uppercase; letter-spacing: 0.08em; display: flex; align-items: center; gap: 4px; }
+.indicator { font-family: monospace; font-size: 0.58rem; padding: 2px 6px; border: 1px solid #1a1d28; color: #727b8f; background: #0a0c10; text-transform: uppercase; letter-spacing: 0.08em; display: flex; align-items: center; gap: 4px; }
 .main { display: grid; grid-template-columns: 1fr 1fr; }
 .pane-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 16px; border-bottom: 1px solid #1e2433; background: #12151c; }
 .pane-title { font-family: monospace; font-size: 0.72rem; color: #00e5ff; letter-spacing: 0.15em; text-transform: uppercase; }
 .pane-title.out { color: #00e676; }
 .pane-actions { display: flex; gap: 8px; }
-button { font-family: monospace; font-size: 0.72rem; padding: 3px 14px; border: 1px solid #3a4055; background: transparent; color: #5a6070; cursor: pointer; text-transform: uppercase; letter-spacing: 0.08em; }
+button { font-family: monospace; font-size: 0.72rem; padding: 3px 14px; border: 1px solid #3a4055; background: transparent; color: #8590a6; cursor: pointer; text-transform: uppercase; letter-spacing: 0.08em; }
 textarea { background: #0d0f14; border: none; color: #c8d0e0; font-family: monospace; font-size: 0.8rem; line-height: 1.6; padding: 16px; width: 100%; resize: none; outline: none; white-space: pre; min-height: 200px; }
 .tab-bar { display: flex; background: #0d0f14; border-bottom: 1px solid #1e2433; }
-.tab { font-family: monospace; font-size: 0.65rem; padding: 4px 10px; color: #5a6070; border-right: 1px solid #1e2433; cursor: pointer; text-transform: uppercase; letter-spacing: 0.1em; }
+.tab { font-family: monospace; font-size: 0.65rem; padding: 4px 10px; color: #8590a6; border-right: 1px solid #1e2433; cursor: pointer; text-transform: uppercase; letter-spacing: 0.1em; }
 .channel-bar { display: flex; gap: 10px; padding: 5px 12px; background: #12151c; border-bottom: 1px solid #1e2433; align-items: center; }
 .full-width { grid-column: 1 / -1; }
 .convert-row { display: flex; justify-content: center; padding: 8px; border-top: 1px solid #1e2433; background: #12151c; grid-column: 1 / -1; }
 .convert-btn { font-family: monospace; font-size: 0.85rem; padding: 10px 40px; border: 1px solid #00e5ff; color: #00e5ff; background: transparent; cursor: pointer; letter-spacing: 0.12em; text-transform: uppercase; }
 .log-bar { border-top: 1px solid #1e2433; background: #12151c; grid-column: 1 / -1; }
-.log-bar-header { padding: 6px 16px; font-family: monospace; font-size: 0.65rem; color: #5a6070; text-transform: uppercase; border-bottom: 1px solid #1e2433; }
+.log-bar-header { padding: 6px 16px; font-family: monospace; font-size: 0.65rem; color: #8590a6; text-transform: uppercase; border-bottom: 1px solid #1e2433; }
 </style>
 <link rel="stylesheet" href="shadertoy_porter.css">
 </head>
@@ -75,10 +75,6 @@ textarea { background: #0d0f14; border: none; color: #c8d0e0; font-family: monos
 			<div class="opt-group" data-tip="Flip the Y axis of the output coordinates. Required for most Shadertoy shaders since Shadertoy's origin is bottom-left, ReShade's is top-left.">
 				<input type="checkbox" id="opt-yflip" checked>
 				<label for="opt-yflip">Flip Y</label>
-			</div>
-			<div class="opt-group" data-tip="Emit the GLSL compatibility helpers (mod, greaterThan, etc.) into a separate ShadertoyHelper.fxh file instead of inlining them. Useful when porting multiple shaders.">
-				<input type="checkbox" id="opt-fxh">
-				<label for="opt-fxh">Separate .fxh</label>
 			</div>
 			<div class="opt-group" data-tip="Toggle syntax highlighting in both editor panes. Disable if the editor feels slow on very large shaders.">
 				<input type="checkbox" id="opt-highlight" checked onchange="onHighlightToggle()">
@@ -129,7 +125,6 @@ textarea { background: #0d0f14; border: none; color: #c8d0e0; font-family: monos
 		<div class="pane-actions">
 			<button onclick="copyOutput()" class="success-btn" id="copy-btn" data-tip="Copy the converted ReShade FX source to the clipboard.">Copy</button>
 			<button onclick="downloadFx()"  class="primary" data-tip="Download the converted shader as a .fx file. Place it in your ReShade Shaders folder.">Download .fx</button>
-			<button onclick="downloadFxh()" class="secondary" data-tip="Download the GLSL compatibility helper file (ShadertoyHelper.fxh). Only needed when 'Separate .fxh' is enabled. Place it alongside the .fx file.">Download .fxh</button>
 		</div>
 	</div>
 
@@ -169,6 +164,8 @@ textarea { background: #0d0f14; border: none; color: #c8d0e0; font-family: monos
 </div>
 
 <script src="shadertoy_assemble.js"></script>
+<script src="shadertoy_lexer.js"></script>
+<script src="shadertoy_analyzer.js"></script>
 <script src="shadertoy_transform.js"></script>
 <script src="shadertoy_json.js"></script>
 <script src="shadertoy_ui.js"></script>

@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.0';
+var PORTER_VERSION = '3.0.40';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -74,16 +74,239 @@ function detectChannelUse(src) {
 // GLSL → HLSL TEXT TRANSFORMATION
 // ═════════════════════════════════════════════════════════════════════════════
 
-function transformGLSL(src, messages, passLabel) {
-	var s = src;
-	var mainImageOutVar = 'fragColor';
-	var mainImageCoordVar = 'fragCoord';
-	// In multipass, rename mainImage to avoid collisions between passes
-	var mainImageName = passLabel ? 'mainImage_' + passLabel : 'mainImage';
+// The superscript digits that number the comment placeholders («⁰», «¹» ...)
+var COMMENT_DIGITS = '⁰¹²³⁴⁵⁶⁷⁸⁹';
 
+// texture() / texture2D() → tex2D()
+// Uses a paren-balanced walker to split args correctly — prevents [^)]+ from
+// spanning newlines and consuming code beyond the call site.
+function rewriteTextureCalls(src)
+{
+	var result = [];
+	var last = 0;
+	var re = /\b(texture2D|texture)\s*\(/g;
+	var match;
+	while ((match = re.exec(src)) !== null) {
+		var fnName = match[1];
+		var parenOpen = match.index + match[0].length - 1;
+		// Walk to matching close paren, collecting top-level comma positions
+		var depth = 1;
+		var k = parenOpen + 1;
+		var commaPositions = [];
+		while (k < src.length && depth > 0) {
+			if (src[k] === '(') { depth++; }
+			else if (src[k] === ')') { depth--; }
+			else if (src[k] === ',' && depth === 1) { commaPositions.push(k); }
+			k++;
+		}
+		// k points just past closing ')'
+		var inner = src.slice(parenOpen + 1, k - 1);
+		var replacement;
+		if (commaPositions.length >= 2) {
+			// 3+ args: strip everything after second comma (bias arg)
+			var arg1 = src.slice(parenOpen + 1, commaPositions[0]).trim();
+			var arg2 = src.slice(commaPositions[0] + 1, commaPositions[1]).trim();
+			replacement = 'tex2D(' + arg1 + ', ' + arg2 + ')';
+		}
+		else {
+			// 1 or 2 args: simple rename
+			replacement = 'tex2D(' + inner + ')';
+		}
+		result.push(src.slice(last, match.index));
+		result.push(replacement);
+		last = k;
+		re.lastIndex = last;
+	}
+	result.push(src.slice(last));
+	return result.join('');
+}
+
+// textureLod(s, uv, lod) → tex2Dlod(s, float4(uv, 0, lod))
+function rewriteTextureLod(src)
+{
+	var result = [];
+	var last = 0;
+	var re = /\btextureLod\s*\(/g;
+	var m;
+	while ((m = re.exec(src)) !== null) {
+		var parsed = splitCallArgs(src, m.index + m[0].length - 1);
+		if (!parsed || parsed.args.length < 2) { continue; }
+		result.push(src.slice(last, m.index));
+		result.push('tex2Dlod(' + parsed.samp + ', float4(' + parsed.args[0] + ', 0.0, ' + parsed.args[1] + '))');
+		last = parsed.end;
+		re.lastIndex = last;
+	}
+	result.push(src.slice(last));
+	return result.join('');
+}
+
+	// ── Rewrite gradient texture instructions inside loops ────────────────────
+	// tex2D / tex3D / texCUBE are gradient instructions. The HLSL compiler tries
+	// to unroll any loop containing one; if it cannot it fails with X3511/X3570.
+	// Rewrite to explicit-LOD equivalents (not gradient instructions):
+	//   tex2D(samp, uv)                    → tex2Dlod(samp, float4(uv, 0.0, 0.0))
+	//   tex3D(samp, uvw)                   → tex3Dlod(samp, float4(uvw, 0.0))
+	//   texCUBE(samp, uvw)                 → texCUBElod(samp, float4(uvw, 0.0))
+	//   tex2Dbias(samp, float4(uv,0,bias)) → tex2Dlod(samp, float4(uv,0,bias))
+	// tex2Dgrad already provides explicit gradients — left alone.
+	// Only applied inside loop bodies. Runs before comment restore.
+function rewriteLoopGradientTex(src, messages)
+{
+	var loopGradCount = 0;
+	// Table of gradient instructions to rewrite.
+	// fn: original function name (regex-escaped)
+	// argCount: number of top-level comma-separated args
+	// rewrite(samp, args): returns replacement string
+	var gradFns = [
+		{
+			re: /\btex2D\s*\(/g,
+			rewrite: function (samp, args) {
+				// tex2D(samp, uv) — uv is args[0]
+				if (args.length < 1) { return null; }
+				return 'tex2Dlod(' + samp + ', float4(' + args[0] + ', 0.0, 0.0))';
+			}
+		},
+		{
+			re: /\btex3D\s*\(/g,
+			rewrite: function (samp, args) {
+				// tex3D(samp, uvw) — uvw is args[0]
+				if (args.length < 1) { return null; }
+				return 'tex3Dlod(' + samp + ', float4(' + args[0] + ', 0.0))';
+			}
+		},
+		{
+			re: /\btexCUBE\s*\(/g,
+			rewrite: function (samp, args) {
+				// texCUBE(samp, uvw) — uvw is args[0]
+				if (args.length < 1) { return null; }
+				return 'texCUBElod(' + samp + ', float4(' + args[0] + ', 0.0))';
+			}
+		},
+		{
+			re: /\btex2Dbias\s*\(/g,
+			rewrite: function (samp, args) {
+				// tex2Dbias(samp, float4(uv, 0, bias)) — already float4, just rename
+				if (args.length < 1) { return null; }
+				return 'tex2Dlod(' + samp + ', ' + args[0] + ')';
+			}
+		}
+	];
+
+	// Split args at top-level commas inside an already-opened paren.
+	// parenOpen: index of '(' in b; returns { args, end } where end is just past ')'
+	function splitArgs(b, parenOpen) {
+		var args = [];
+		var depth = 1;
+		var k = parenOpen + 1;
+		var segStart = k;
+		// First arg is the sampler — find first top-level comma
+		var sampEnd = -1;
+		while (k < b.length && depth > 0) {
+			if (b[k] === '(') { depth++; }
+			else if (b[k] === ')') { depth--; }
+			else if (b[k] === ',' && depth === 1 && sampEnd === -1) {
+				sampEnd = k;
+				segStart = k + 1;
+			}
+			k++;
+		}
+		// k now points just past closing ')'
+		if (sampEnd === -1) { return null; } // no comma — can't split samp from args
+		var samp = b.slice(parenOpen + 1, sampEnd).trim();
+		var remainingArgs = [];
+		// Split remaining args (everything after first comma) at top-level commas
+		var rem = b.slice(segStart, k - 1);
+		var d2 = 0;
+		var start = 0;
+		for (var ri = 0; ri < rem.length; ri++) {
+			if (rem[ri] === '(' || rem[ri] === '[') { d2++; }
+			else if (rem[ri] === ')' || rem[ri] === ']') { d2--; }
+			else if (rem[ri] === ',' && d2 === 0) {
+				remainingArgs.push(rem.slice(start, ri).trim());
+				start = ri + 1;
+			}
+		}
+		remainingArgs.push(rem.slice(start).trim());
+		return { samp: samp, args: remainingArgs, end: k };
+	}
+
+	var result = [];
+	var last = 0;
+	var loopRe = /\b(for|while)\s*\(/g;
+	var lm;
+	while ((lm = loopRe.exec(src)) !== null) {
+		// Walk to end of loop header closing paren
+		var depth = 1;
+		var k = lm.index + lm[0].length;
+		while (k < src.length && depth > 0) {
+			if (src[k] === '(') { depth++; }
+			else if (src[k] === ')') { depth--; }
+			k++;
+		}
+		// Skip whitespace to find opening brace of body
+		var bodyStart = k;
+		while (bodyStart < src.length && /\s/.test(src[bodyStart])) { bodyStart++; }
+		if (src[bodyStart] !== '{') { continue; }
+
+		// Walk to matching closing brace
+		depth = 1;
+		var j = bodyStart + 1;
+		while (j < src.length && depth > 0) {
+			if (src[j] === '{') { depth++; }
+			else if (src[j] === '}') { depth--; }
+			j++;
+		}
+		var bodyEnd = j;
+		var body = src.slice(bodyStart, bodyEnd);
+
+		// Quick check — skip if no gradient instructions present
+		if (!/\b(tex2D|tex3D|texCUBE|tex2Dbias)\s*\(/.test(body)) { continue; }
+
+		// Apply each gradient function rewrite to the body
+		var newBody = body;
+		gradFns.forEach(function (gf) {
+			var r2 = [];
+			var l2 = 0;
+			var re2 = new RegExp(gf.re.source, 'g');
+			var tm;
+			while ((tm = re2.exec(newBody)) !== null) {
+				var parenOpen = tm.index + tm[0].length - 1;
+				var split = splitArgs(newBody, parenOpen);
+				if (!split) { continue; }
+				var replacement = gf.rewrite(split.samp, split.args);
+				if (!replacement) { continue; }
+				r2.push(newBody.slice(l2, tm.index));
+				r2.push(replacement);
+				l2 = split.end;
+				re2.lastIndex = l2;
+				loopGradCount++;
+			}
+			r2.push(newBody.slice(l2));
+			newBody = r2.join('');
+		});
+
+		result.push(src.slice(last, bodyStart));
+		result.push(newBody);
+		last = bodyEnd;
+		loopRe.lastIndex = last;
+	}
+	result.push(src.slice(last));
+	var rewritten = result.join('');
+	if (loopGradCount > 0) {
+		messages.push({
+			level: 'info', text:
+				loopGradCount + ' gradient texture call(s) inside loop(s) rewritten to explicit-LOD equivalents (tex2Dlod/tex3Dlod/texCUBElod) to prevent compiler unroll errors (X3511/X3570).'
+		});
+	}
+	return rewritten;
+}
+
+function stepExtractComments(ctx)
+{
+	var s = ctx.src;
 	// ── Extract comments before any transforms so we never mangle them ────────
-	var xComments = [];
-	var xSuperDigits = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+	var xSuperDigits = COMMENT_DIGITS;
+	var xComments = ctx.comments;
 	function xMakePH(i) {
 		var s = '';
 		var n = i;
@@ -100,56 +323,111 @@ function transformGLSL(src, messages, passLabel) {
 		xComments.push(m);
 		return xMakePH(xComments.length - 1) + '\n';
 	});
+	ctx.src = s;
+}
 
+function stepRemoveDirectives(ctx)
+{
+	var s = ctx.src;
 	// ── Remove directives not valid in HLSL ──────────────────────────────────
 	s = s.replace(/#version\s+\d+[^\n]*/g, '');
 	s = s.replace(/\blayout\s*\([^)]*\)\s*/g, '');
+	ctx.src = s;
+}
 
-	// ── Precision qualifiers ─────────────────────────────────────────────────
+function stepPrecision(ctx)
+{
+	var s = ctx.src;
+	// ── Precision statements and qualifiers ──────────────────────────────────
+	s = s.replace(/^[ \t]*precision\s+(?:highp|mediump|lowp)\s+\w+\s*;[ \t]*\n?/gm, '');
 	s = s.replace(/\b(highp|mediump|lowp)\s+/g, '');
+	ctx.src = s;
+}
 
+function stepGlFragCoord(ctx)
+{
+	var s = ctx.src;
 	// ── GLSL built-in variables ───────────────────────────────────────────────
-	s = s.replace(/\bgl_FragCoord\b/g, 'fragCoord');
+	// gl_FragCoord is a global in GLSL, readable from any function; the entry point fills in ST_FragCoord
+	var usesGlFragCoord = /\bgl_FragCoord\b/.test(s);
+	s = s.replace(/\bgl_FragCoord\b/g, 'ST_FragCoord');
+	ctx.usesGlFragCoord = usesGlFragCoord;
+	ctx.src = s;
+}
 
+function stepUniformRedeclarations(ctx)
+{
+	var s = ctx.src;
 	// ── Remove shadertoy-style uniform re-declarations ────────────────────────
 	s = s.replace(/uniform\s+\S+\s+i(Resolution|Time|TimeDelta|Frame|Date|Mouse|Channel[0-3])\s*;[^\n]*/g, '');
+	ctx.src = s;
+}
 
+function stepFloatSuffix(ctx)
+{
+	var s = ctx.src;
 	// ── Strip trailing f suffix from float literals (1.0f → 1.0) ────────────
 	s = s.replace(/(\d*\.\d+|\d+\.\d*)f\b/g, '$1');
+	ctx.src = s;
+}
 
+function stepTypeNames(ctx)
+{
+	var s = ctx.src;
 	// ── Inline type replacements (no #define needed) ──────────────────────────
 	s = s.replace(/\bvec([234])\b/g, 'float$1');
 	s = s.replace(/\bivec([234])\b/g, 'int$1');
 	s = s.replace(/\buvec([234])\b/g, 'uint$1');
 	s = s.replace(/\bbvec([234])\b/g, 'bool$1');
 	s = s.replace(/\bmat([234])\b/g, 'float$1x$1');
+	ctx.src = s;
+}
 
+function stepStructConstructors(ctx)
+{
+	var s = ctx.src;
+	var messages = ctx.messages;
 	// ── Struct constructor syntax: Name(a,b,c) → Name_ctor(a,b,c) ────────────
 	// HLSL has no positional struct constructors. Generate a helper function for
 	// each struct that is used as a constructor and rename all call sites.
 	// Must run after type replacements so member types are already in HLSL form.
 	s = rewriteStructConstructors(s, messages);
+	ctx.src = s;
+}
 
+function stepIntrinsicNames(ctx)
+{
+	var s = ctx.src;
 	// ── Inline intrinsic replacements ─────────────────────────────────────────
 	s = s.replace(/\bmix\s*\(/g, 'lerp(');
 	s = s.replace(/\bfract\s*\(/g, 'frac(');
 	s = s.replace(/\binversesqrt\s*\(/g, 'rsqrt(');
 	s = s.replace(/\bdFdx\s*\(/g, 'ddx(');
 	s = s.replace(/\bdFdy\s*\(/g, 'ddy(');
+	ctx.src = s;
+}
 
-	// ── Rename HLSL reserved keywords used as identifiers in GLSL ────────────
-	// These are valid GLSL variable/parameter names but reserved in HLSL/ReShade FX.
-	// Append _ to avoid syntax errors. Skip preprocessor lines.
-	['point', 'line', 'linear', 'sample', 'pass'].forEach(function (kw) {
-		var re = new RegExp('\\b(' + kw + ')\\b', 'g');
-		s = s.replace(re, function (match, _, offset, str) {
-			// Skip if on a preprocessor line
-			var lineStart = str.lastIndexOf('\n', offset) + 1;
-			if (/^\s*#/.test(str.slice(lineStart, offset + match.length))) { return match; }
-			return kw + '_';
-		});
-	});
+function stepReservedIdentifiers(ctx)
+{
+	var s = ctx.src;
+	var messages = ctx.messages;
+	// ── Rename ReShade FX / HLSL reserved words used as identifiers in GLSL ──
+	s = renameReservedIdentifiers(s, messages);
+	ctx.src = s;
+}
 
+function stepSplitGlobalDeclarators(ctx)
+{
+	var s = ctx.src;
+	var messages = ctx.messages;
+	// several variables in one global declaration: one declaration per variable
+	s = splitGlobalDeclarators(s, messages);
+	ctx.src = s;
+}
+
+function stepConstToStaticConst(ctx)
+{
+	var s = ctx.src;
 	// ── const → static const  (file scope only) ───────────────────────────────
 	// Matches both line-start const and preprocessor-indented const (spaces only,
 	// no tab indent which would indicate function-scope).
@@ -158,16 +436,29 @@ function transformGLSL(src, messages, passLabel) {
 		if (/\t/.test(indent)) { return match; }
 		return indent + 'static ' + kw;
 	});
+	ctx.src = s;
+}
 
+function stepConstInitialisers(ctx)
+{
+	var s = ctx.src;
 	// ── Replace common const initialisers that use function calls (not valid in HLSL static const) ─
 	s = s.replace(/\bstatic\s+const\s+float\s+(\w+)\s*=\s*acos\s*\(\s*-1\.0*\s*\)\s*;/g,
 		'static const float $1 = 3.1415927;');
 	s = s.replace(/\bstatic\s+const\s+float\s+(\w+)\s*=\s*sqrt\s*\(\s*0?\.5\s*\)\s*;/g,
 		'static const float $1 = 0.70710678;');
+	ctx.src = s;
+}
 
+function stepStaticGlobals(ctx)
+{
+	var s = ctx.src;
 	// ── Mutable file-scope globals need 'static' in HLSL ────────────────────
 	// Pass 1: match type declarations at start of line
-	s = s.replace(/^((float[234x]*|int[234]?|uint[234]?|bool)\s+)([a-zA-Z_]\w*)\s*(?=[,;=\s])/gm,
+	var structNames = [];
+	s.replace(/\bstruct\s+(\w+)\s*\{/g, function (_, name) { structNames.push(name); return _; });
+	var globalTypes = 'float[234x]*|int[234]?|uint[234]?|bool' + structNames.map(function (n) { return '|' + n; }).join('');
+	s = s.replace(new RegExp('^(((?:' + globalTypes + ')\\s+))([a-zA-Z_]\\w*)\\s*(?=[,;=\\s\\[])', 'gm'),
 		function (match, typeAndSpace, type, name, offset, str) {
 			var lineStart = str.lastIndexOf('\n', offset) + 1;
 			var linePrefix = str.slice(lineStart, offset);
@@ -183,11 +474,12 @@ function transformGLSL(src, messages, passLabel) {
 			return ';static ' + type + space + name;
 		});
 	// ── iTime is kept as-is; assemble.js defines it directly ─────────────────
+	ctx.src = s;
+}
 
-	// ── vecN *= matN  →  vecN = mul(matN, vecN) ─────────────────────────────
-	// HLSL does not allow *= with a matrix RHS on a vector variable.
-	s = rewriteMatrixMulAssign(s);
-
+function stepUnreachableCode(ctx)
+{
+	var s = ctx.src;
 	// ── Remove unreachable statements after return (ReShade FX errors on these) ─
 	// Case 1: two return statements on consecutive lines
 	// (handles both normal semicolon-suffix and prefix-semicolon golf style)
@@ -206,18 +498,91 @@ function transformGLSL(src, messages, passLabel) {
 		function (match, ret, middle) {
 			return ret + '\n' + middle;
 		});
-	s = rewriteInlineMatrixMul(s);
+	// Case 3: anything after a return that stands on its own in a block, however it is laid out
+	s = removeCodeAfterReturn(s);
+	ctx.src = s;
+}
 
+function stepArrayConstructors(ctx)
+{
+	var s = ctx.src;
+	// ── GLSL array constructors: type[N](...) → {...} ───────────────────────────
+	// Runs before the expression-tree rewrites, which cannot read type[N](...).
+	var arrayStructNames = [];
+	s.replace(/\bstruct\s+(\w+)\s*\{/g, function (m, name) { arrayStructNames.push(name); return m; });
+	s = rewriteArrayConstructors(s, arrayStructNames);
+	ctx.src = s;
+}
+
+function stepArrayLength(ctx)
+{
+	var s = ctx.src;
+	var messages = ctx.messages;
+	// array.length() → the size of the array
+	s = rewriteArrayLength(s, messages);
+	ctx.src = s;
+}
+
+function stepMatrixMul(ctx)
+{
+	var s = ctx.src;
+	var messages = ctx.messages;
+	s = rewriteInlineMatrixMul(s, messages);
+	ctx.src = s;
+}
+
+function stepVectorConstructorArgs(ctx)
+{
+	var s = ctx.src;
+	var messages = ctx.messages;
 	// ── Truncate over-specified vector constructors: float3(a, b, vec3) → float3(a, b, vec3.x) ─
-	s = rewriteVectorConstructorArgs(s);
+	s = rewriteVectorConstructorArgs(s, messages);
+	ctx.src = s;
+}
 
+function stepBroadcastConstructors(ctx)
+{
+	var s = ctx.src;
+	var messages = ctx.messages;
 	// ── Broadcast constructors: vec3(x) → float3(x, x, x) ───────────────────
 	// ReshadeFX does not support single-scalar-argument vector constructors.
 	// We only expand when the single argument is clearly a numeric literal or
 	// simple arithmetic expression (contains digits, operators, dots, parens).
 	// Single bare identifiers are left alone — they may be valid same-type casts.
-	s = rewriteBroadcastConstructors(s);
+	// the same inside a #define, where the analyzer does not look (only a literal number can be told to be a scalar)
+	s = expandLiteralConstructorsInMacros(s, messages);
+	s = rewriteBroadcastConstructors(s, messages);
+	ctx.src = s;
+}
 
+function stepDiagonalMatrices(ctx)
+{
+	var s = ctx.src;
+	var messages = ctx.messages;
+	s = rewriteDiagonalMatrices(s, messages);
+	ctx.src = s;
+}
+
+function stepTextureVariants(ctx)
+{
+	var s = ctx.src;
+	var messages = ctx.messages;
+	s = rewriteTextureVariants(s, messages);
+	ctx.src = s;
+}
+
+function stepVectorEquality(ctx)
+{
+	var s = ctx.src;
+	var messages = ctx.messages;
+	// == and != on vectors: all(...) / any(...)
+	s = rewriteVectorEquality(s, messages);
+	ctx.src = s;
+}
+
+function stepCastsOnVectors(ctx)
+{
+	var s = ctx.src;
 	// ── Upgrade scalar casts applied to vector expressions ───────────────────
 	// e.g. int(expr.xy) → int2(expr.xy)  when swizzle is the final operation.
 	// When a vector swizzle appears mid-expression (e.g. fragCoord.xy / y * s),
@@ -231,79 +596,112 @@ function transformGLSL(src, messages, passLabel) {
 		if (/\.(xy|rg|xyz|rgb|xyzw|rgba)\b/.test(t)) { return type + '((' + inner + ').x)'; }
 		return match;
 	});
+	ctx.src = s;
+}
 
+function stepAtan2(ctx)
+{
+	var s = ctx.src;
 	// ── Two-argument atan(y, x) → atan2(y, x) ────────────────────────────────
 	s = rewriteTwoArgAtan(s);
+	ctx.src = s;
+}
 
+function stepTextureCalls(ctx)
+{
+	var s = ctx.src;
 	// ── texture() / texture2D() → tex2D() ────────────────────────────────────
 	// Uses a paren-balanced walker to split args correctly — prevents [^)]+ from
 	// spanning newlines and consuming code beyond the call site.
-	s = (function (src) {
-		var result = [];
-		var last = 0;
-		var re = /\b(texture2D|texture)\s*\(/g;
-		var match;
-		while ((match = re.exec(src)) !== null) {
-			var fnName = match[1];
-			var parenOpen = match.index + match[0].length - 1;
-			// Walk to matching close paren, collecting top-level comma positions
-			var depth = 1;
-			var k = parenOpen + 1;
-			var commaPositions = [];
-			while (k < src.length && depth > 0) {
-				if (src[k] === '(') { depth++; }
-				else if (src[k] === ')') { depth--; }
-				else if (src[k] === ',' && depth === 1) { commaPositions.push(k); }
-				k++;
-			}
-			// k points just past closing ')'
-			var inner = src.slice(parenOpen + 1, k - 1);
-			var replacement;
-			if (commaPositions.length >= 2) {
-				// 3+ args: strip everything after second comma (bias arg)
-				var arg1 = src.slice(parenOpen + 1, commaPositions[0]).trim();
-				var arg2 = src.slice(commaPositions[0] + 1, commaPositions[1]).trim();
-				replacement = 'tex2D(' + arg1 + ', ' + arg2 + ')';
-			}
-			else {
-				// 1 or 2 args: simple rename
-				replacement = 'tex2D(' + inner + ')';
-			}
-			result.push(src.slice(last, match.index));
-			result.push(replacement);
-			last = k;
-			re.lastIndex = last;
-		}
-		result.push(src.slice(last));
-		return result.join('');
-	}(s));
+	s = rewriteTextureCalls(s);
+	ctx.src = s;
+}
 
+function stepTextureGrad(ctx)
+{
+	var s = ctx.src;
 	// ── textureGrad(s, uv, ddx, ddy) → tex2Dgrad(s, uv, ddx, ddy) ──────────
 	s = s.replace(/\btextureGrad\s*\(/g, 'tex2Dgrad(');
+	ctx.src = s;
+}
 
+function stepTextureLod(ctx)
+{
+	var s = ctx.src;
 	// ── textureLod(s, uv, lod) → tex2Dlod(s, float4(uv, 0, lod)) ────────────
-	s = s.replace(
-		/\btextureLod\s*\(\s*([^,]+),\s*([^,]+),\s*([^)]+)\)/g,
-		function (_, samp, uv, lod) {
-			return 'tex2Dlod(' + samp.trim() + ', float4(' + uv.trim() + ', 0.0, ' + lod.trim() + '))';
-		}
-	);
+	s = rewriteTextureLod(s);
+	ctx.src = s;
+}
 
+function stepTexelFetch(ctx)
+{
+	var s = ctx.src;
+	// ── texelFetch(s, p, lod) → tex2Dfetch(s, p) ;  textureSize → tex2Dsize ──
+	s = rewriteTexelFetch(s);
+	ctx.src = s;
+}
+
+function stepGlslBuiltins(ctx)
+{
+	var s = ctx.src;
+	// ── GLSL built-ins ReShade FX lacks or spells differently ─────────────────
+	s = rewriteGlslBuiltins(s);
+	ctx.src = s;
+}
+
+function stepSwitchBreaks(ctx)
+{
+	var s = ctx.src;
+	var messages = ctx.messages;
+	s = rewriteSwitchBreaks(s, messages);
+	ctx.src = s;
+}
+
+function stepCubemapSamples(ctx)
+{
+	var s = ctx.src;
+	var messages = ctx.messages;
 	// ── textureCube(s, dir) → tex2D(s, ST_cubemap_uv(dir)) ──────────────────
 	// Must run before the loop-gradient rewriter so any resulting tex2D calls
 	// inside loops are caught and promoted to tex2Dlod.
 	s = rewriteCubemapSamples(s, messages);
+	ctx.src = s;
+}
 
+function stepCubemapLookups(ctx)
+{
+	var s = ctx.src;
+	var messages = ctx.messages;
+	var options = ctx.options;
+	s = rewriteCubemapLookups(s, (options && options.cubemapSamplers) || [], messages);
+	ctx.src = s;
+}
+
+function stepEmptyChannels(ctx)
+{
+	var s = ctx.src;
+	var messages = ctx.messages;
+	var options = ctx.options;
+	// a lookup in a channel with nothing behind it reads zero
+	s = rewriteEmptyChannels(s, (options && options.emptySamplers) || [], messages);
+	ctx.src = s;
+}
+
+function stepClampToSaturate(ctx)
+{
+	var s = ctx.src;
 	// ── clamp(x, 0.0, 1.0) → saturate(x) ────────────────────────────────────
 	s = s.replace(/\bclamp\s*\(\s*([^,]+),\s*0\.0+f?\s*,\s*1\.0+f?\s*\)/g, 'saturate($1)');
 	s = s.replace(/\bclamp\s*\(\s*([^,]+),\s*0\s*,\s*1\s*\)/g, 'saturate($1)');
+	ctx.src = s;
+}
 
-	// ── GLSL array initializers: type[N](...) → {...} ────────────────────────
-	// e.g. float[](0.3, 0.8) → {0.3, 0.8}
-	s = s.replace(/\w+(?:\w+)?\s*\[\s*\]\s*\(([^)]*)\)/g, function (_, args) {
-		return '{' + args + '}';
-	});
-
+function stepMainImageSignature(ctx)
+{
+	var s = ctx.src;
+	var mainImageName = ctx.mainImageName;
+	var mainImageOutVar = ctx.outVar;
+	var mainImageCoordVar = ctx.coordVar;
 	// ── mainImage signature → HLSL entry point ──────────────────────────────
 	// Capture output and coord variable names for use in the PS entry wrapper.
 	// In multipass, rename to avoid collision between passes.
@@ -315,13 +713,34 @@ function transformGLSL(src, messages, passLabel) {
 			return 'void ' + mainImageName + '(float2 ' + coordVar + ', out float4 ' + outVar + ' : SV_Target)';
 		}
 	);
+	ctx.outVar = mainImageOutVar;
+	ctx.coordVar = mainImageCoordVar;
+	ctx.src = s;
+}
 
+function stepMainImageBody(ctx)
+{
+	var s = ctx.src;
+	var messages = ctx.messages;
+	var mainImageName = ctx.mainImageName;
+	var mainImageOutVar = ctx.outVar;
+	var mainImageCoordVar = ctx.coordVar;
 	// ── Rewrite mainImage body to inject output var local and return statement ──
 	s = rewriteMainBody(s, messages, mainImageOutVar, mainImageCoordVar, mainImageName);
+	ctx.src = s;
+}
 
+function stepIndentation(ctx)
+{
+	var s = ctx.src;
 	// ── Normalize space indentation to tabs ───────────────────────────────────
 	s = normalizeIndentation(s);
+	ctx.src = s;
+}
 
+function stepAllmanBraces(ctx)
+{
+	var s = ctx.src;
 	// ── Allman style braces ───────────────────────────────────────────────────
 	// Space after flow control keywords
 	s = s.replace(/\b(for|if|while|switch)\s*\(/g, '$1 (');
@@ -344,174 +763,309 @@ function transformGLSL(src, messages, passLabel) {
 		}
 		return line;
 	}).join('\n');
+	ctx.src = s;
+}
 
-	// ── Rewrite gradient texture instructions inside loops ────────────────────
-	// tex2D / tex3D / texCUBE are gradient instructions. The HLSL compiler tries
-	// to unroll any loop containing one; if it cannot it fails with X3511/X3570.
-	// Rewrite to explicit-LOD equivalents (not gradient instructions):
-	//   tex2D(samp, uv)                    → tex2Dlod(samp, float4(uv, 0.0, 0.0))
-	//   tex3D(samp, uvw)                   → tex3Dlod(samp, float4(uvw, 0.0))
-	//   texCUBE(samp, uvw)                 → texCUBElod(samp, float4(uvw, 0.0))
-	//   tex2Dbias(samp, float4(uv,0,bias)) → tex2Dlod(samp, float4(uv,0,bias))
-	// tex2Dgrad already provides explicit gradients — left alone.
-	// Only applied inside loop bodies. Runs before comment restore.
-	var loopGradCount = 0;
-	s = (function rewriteLoopGradientTex(src) {
-		// Table of gradient instructions to rewrite.
-		// fn: original function name (regex-escaped)
-		// argCount: number of top-level comma-separated args
-		// rewrite(samp, args): returns replacement string
-		var gradFns = [
-			{
-				re: /\btex2D\s*\(/g,
-				rewrite: function (samp, args) {
-					// tex2D(samp, uv) — uv is args[0]
-					if (args.length < 1) { return null; }
-					return 'tex2Dlod(' + samp + ', float4(' + args[0] + ', 0.0, 0.0))';
-				}
-			},
-			{
-				re: /\btex3D\s*\(/g,
-				rewrite: function (samp, args) {
-					// tex3D(samp, uvw) — uvw is args[0]
-					if (args.length < 1) { return null; }
-					return 'tex3Dlod(' + samp + ', float4(' + args[0] + ', 0.0))';
-				}
-			},
-			{
-				re: /\btexCUBE\s*\(/g,
-				rewrite: function (samp, args) {
-					// texCUBE(samp, uvw) — uvw is args[0]
-					if (args.length < 1) { return null; }
-					return 'texCUBElod(' + samp + ', float4(' + args[0] + ', 0.0))';
-				}
-			},
-			{
-				re: /\btex2Dbias\s*\(/g,
-				rewrite: function (samp, args) {
-					// tex2Dbias(samp, float4(uv, 0, bias)) — already float4, just rename
-					if (args.length < 1) { return null; }
-					return 'tex2Dlod(' + samp + ', ' + args[0] + ')';
-				}
-			}
-		];
+function stepLoopGradientTex(ctx)
+{
+	var s = ctx.src;
+	var messages = ctx.messages;
+	// ── Rewrite gradient texture instructions inside loops (see rewriteLoopGradientTex) ──
+	s = rewriteLoopGradientTex(s, messages);
+	ctx.src = s;
+}
 
-		// Split args at top-level commas inside an already-opened paren.
-		// parenOpen: index of '(' in b; returns { args, end } where end is just past ')'
-		function splitArgs(b, parenOpen) {
-			var args = [];
-			var depth = 1;
-			var k = parenOpen + 1;
-			var segStart = k;
-			// First arg is the sampler — find first top-level comma
-			var sampEnd = -1;
-			while (k < b.length && depth > 0) {
-				if (b[k] === '(') { depth++; }
-				else if (b[k] === ')') { depth--; }
-				else if (b[k] === ',' && depth === 1 && sampEnd === -1) {
-					sampEnd = k;
-					segStart = k + 1;
-				}
-				k++;
-			}
-			// k now points just past closing ')'
-			if (sampEnd === -1) { return null; } // no comma — can't split samp from args
-			var samp = b.slice(parenOpen + 1, sampEnd).trim();
-			var remainingArgs = [];
-			// Split remaining args (everything after first comma) at top-level commas
-			var rem = b.slice(segStart, k - 1);
-			var d2 = 0;
-			var start = 0;
-			for (var ri = 0; ri < rem.length; ri++) {
-				if (rem[ri] === '(' || rem[ri] === '[') { d2++; }
-				else if (rem[ri] === ')' || rem[ri] === ']') { d2--; }
-				else if (rem[ri] === ',' && d2 === 0) {
-					remainingArgs.push(rem.slice(start, ri).trim());
-					start = ri + 1;
-				}
-			}
-			remainingArgs.push(rem.slice(start).trim());
-			return { samp: samp, args: remainingArgs, end: k };
-		}
-
-		var result = [];
-		var last = 0;
-		var loopRe = /\b(for|while)\s*\(/g;
-		var lm;
-		while ((lm = loopRe.exec(src)) !== null) {
-			// Walk to end of loop header closing paren
-			var depth = 1;
-			var k = lm.index + lm[0].length;
-			while (k < src.length && depth > 0) {
-				if (src[k] === '(') { depth++; }
-				else if (src[k] === ')') { depth--; }
-				k++;
-			}
-			// Skip whitespace to find opening brace of body
-			var bodyStart = k;
-			while (bodyStart < src.length && /\s/.test(src[bodyStart])) { bodyStart++; }
-			if (src[bodyStart] !== '{') { continue; }
-
-			// Walk to matching closing brace
-			depth = 1;
-			var j = bodyStart + 1;
-			while (j < src.length && depth > 0) {
-				if (src[j] === '{') { depth++; }
-				else if (src[j] === '}') { depth--; }
-				j++;
-			}
-			var bodyEnd = j;
-			var body = src.slice(bodyStart, bodyEnd);
-
-			// Quick check — skip if no gradient instructions present
-			if (!/\b(tex2D|tex3D|texCUBE|tex2Dbias)\s*\(/.test(body)) { continue; }
-
-			// Apply each gradient function rewrite to the body
-			var newBody = body;
-			gradFns.forEach(function (gf) {
-				var r2 = [];
-				var l2 = 0;
-				var re2 = new RegExp(gf.re.source, 'g');
-				var tm;
-				while ((tm = re2.exec(newBody)) !== null) {
-					var parenOpen = tm.index + tm[0].length - 1;
-					var split = splitArgs(newBody, parenOpen);
-					if (!split) { continue; }
-					var replacement = gf.rewrite(split.samp, split.args);
-					if (!replacement) { continue; }
-					r2.push(newBody.slice(l2, tm.index));
-					r2.push(replacement);
-					l2 = split.end;
-					re2.lastIndex = l2;
-					loopGradCount++;
-				}
-				r2.push(newBody.slice(l2));
-				newBody = r2.join('');
-			});
-
-			result.push(src.slice(last, bodyStart));
-			result.push(newBody);
-			last = bodyEnd;
-			loopRe.lastIndex = last;
-		}
-		result.push(src.slice(last));
-		return result.join('');
-	}(s));
-
-	if (loopGradCount > 0) {
-		messages.push({
-			level: 'info', text:
-				loopGradCount + ' gradient texture call(s) inside loop(s) rewritten to explicit-LOD equivalents (tex2Dlod/tex3Dlod/texCUBElod) to prevent compiler unroll errors (X3511/X3570).'
-		});
+function stepDropIntrinsicMacros(ctx)
+{
+	var s = ctx.src;
+	var messages = ctx.messages;
+	// ── Drop user macros that re-implement an HLSL intrinsic ────────────────────
+	// Shaders ported from HLSL often define  #define mul(a,b) b*a  so that GLSL can call mul().
+	// For GLSL, b*a is HLSL mul(a, b), so the macro is the identity here; left in place it would
+	// expand every mul(M, v) into a component-wise v*M. The same goes for a saturate macro,
+	// which the clamp(x, 0, 1) rewrite above turns into  #define saturate(a) saturate(a).
+	var droppedMacros = [];
+	s = s.replace(/^[ \t]*#[ \t]*define[ \t]+mul[ \t]*\([ \t]*(\w+)[ \t]*,[ \t]*(\w+)[ \t]*\)[ \t]*\(?[ \t]*\2[ \t]*\)?[ \t]*\*[ \t]*\(?[ \t]*\1[ \t]*\)?[ \t]*(?:\n|$)/gm,
+		function () { droppedMacros.push('mul'); return ''; });
+	s = s.replace(/^[ \t]*#[ \t]*define[ \t]+saturate[ \t]*\([ \t]*(\w+)[ \t]*\)[ \t]*saturate[ \t]*\([ \t]*\1[ \t]*\)[ \t]*(?:\n|$)/gm,
+		function () { droppedMacros.push('saturate'); return ''; });
+	if (droppedMacros.length > 0)
+	{
+		messages.push({ level: 'info', text: 'Removed user macro(s) re-implementing HLSL intrinsics (' + droppedMacros.join(', ') + '); the intrinsic is used instead.' });
 	}
+	ctx.src = s;
+}
 
+function stepHoistGlobalInits(ctx)
+{
+	var s = ctx.src;
+	// ── Hoist file-scope initialisers that cannot be evaluated at compile time ──────────────────
+	// ReShade FX wants a literal expression in a global initialiser: a function call is rejected
+	// (X3005) and so is a value that depends on another global that is not a constant (X3011), but
+	// GLSL allows both, e.g.  float tau = atan(1.0)*8.0;  or  mat2 g = rot0;  The declaration stays,
+	// the assignment moves to the pass entry point where it runs before mainImage, in the order the
+	// declarations had. A global that is hoisted is no longer a constant, so an initialiser that uses
+	// one is hoisted as well, and so on down the file.
+	var globalInits = [];
+	var hoisted = [];
+	s = s.replace(/^static[ ]+(const[ ]+)?(float[234x]*|int[234]?|uint[234]?|bool)[ ]+(\w+)[ ]*=[ ]*([^;{«]*?);/gm,
+		function (match, isConst, type, name, init) {
+			var callRe = /\b(?!(?:float[234]?(?:x[234])?|int[234]?|uint[234]?|bool)\b)[A-Za-z_]\w*\s*\(/;
+			var usesHoisted = hoisted.some(function (h) { return new RegExp('(?<![\\w.])' + h + '(?!\\w)').test(init); });
+			if (!callRe.test(init) && !usesHoisted) { return match; }
+			hoisted.push(name);
+			globalInits.push(name + ' = ' + init.replace(/\s+/g, ' ').trim() + ';');
+			return 'static ' + type + ' ' + name + ';';
+		});
+	ctx.globalInits = globalInits;
+	ctx.src = s;
+}
+
+function stepReorderFunctions(ctx)
+{
+	var s = ctx.src;
+	var messages = ctx.messages;
+	// ── ReShade FX has no forward declarations: define every function before it is used ──
+	s = reorderFunctions(s, messages);
+	ctx.src = s;
+}
+
+function stepGlslHelpers(ctx)
+{
+	var s = ctx.src;
+	// ── Helper functions for GLSL built-ins ReShade FX lacks (inverse, outerProduct, matrixCompMult) ──
+	s = injectGlslHelpers(s);
+	ctx.src = s;
+}
+
+function stepFragCoordDeclaration(ctx)
+{
+	var s = ctx.src;
+	// ── ST_FragCoord is what gl_FragCoord became; the entry point fills it in ──
+	if (ctx.usesGlFragCoord) { s = 'static float4 ST_FragCoord;\n' + s; }
+	ctx.src = s;
+}
+
+function stepRestoreComments(ctx)
+{
+	var s = ctx.src;
+	var xSuperDigits = COMMENT_DIGITS;
+	var xComments = ctx.comments;
 	// ── Restore extracted comments ────────────────────────────────────────────
 	s = s.replace(/«([⁰¹²³⁴⁵⁶⁷⁸⁹]+)»/g, function (_, supIdx) {
 		var idx = supIdx.split('').map(function (c) { return xSuperDigits.indexOf(c); }).join('');
 		return xComments[parseInt(idx, 10)];
 	});
+	ctx.src = s;
+}
 
-	return { src: s, outVar: mainImageOutVar, coordVar: mainImageCoordVar, mainImageName: mainImageName };
+// ─────────────────────────────────────────────────────────────────────────────
+// The steps, in the order they run. Each step has a name and a function that reads and changes
+// the pass (ctx.src is the source; the other fields are what steps tell each other and what the
+// pass hands back). An order that matters is written down as  after  with a reason, and is checked
+// every time the pipeline runs (checkTransformPipeline), so moving a step cannot silently break it.
+// ─────────────────────────────────────────────────────────────────────────────
+var TRANSFORM_STEPS = [
+	{ name: 'extractComments', run: stepExtractComments },
+	{ name: 'removeDirectives', run: stepRemoveDirectives },
+	{ name: 'precision', run: stepPrecision },
+	{ name: 'glFragCoord', run: stepGlFragCoord },
+	{ name: 'uniformRedeclarations', run: stepUniformRedeclarations },
+	{ name: 'floatSuffix', run: stepFloatSuffix },
+	{ name: 'typeNames', run: stepTypeNames },
+	{
+		name: 'structConstructors',
+		run: stepStructConstructors,
+		after: ['typeNames'],
+		why: 'member types must already be in HLSL form'
+	},
+	{ name: 'intrinsicNames', run: stepIntrinsicNames },
+	{ name: 'reservedIdentifiers', run: stepReservedIdentifiers },
+	{ name: 'splitGlobalDeclarators', run: stepSplitGlobalDeclarators, after: ['extractComments'], why: 'it moves comment placeholders and must see them rather than the comments' },
+	{
+		name: 'constToStaticConst',
+		run: stepConstToStaticConst,
+		after: ['splitGlobalDeclarators'],
+		why: 'it looks for one variable per declaration'
+	},
+	{
+		name: 'constInitialisers',
+		run: stepConstInitialisers,
+		after: ['splitGlobalDeclarators'],
+		why: 'it looks for one variable per declaration'
+	},
+	{
+		name: 'staticGlobals',
+		run: stepStaticGlobals,
+		after: ['splitGlobalDeclarators'],
+		why: 'it looks for one variable per declaration'
+	},
+	{
+		name: 'unreachableCode',
+		run: stepUnreachableCode,
+		after: ['extractComments'],
+		why: 'it reads the comment placeholders'
+	},
+	{ name: 'arrayConstructors', run: stepArrayConstructors },
+	{ name: 'arrayLength', run: stepArrayLength, after: ['arrayConstructors'], why: 'it counts the elements of the braced initialisers that step produces' },
+	{
+		name: 'matrixMul',
+		run: stepMatrixMul,
+		after: ['typeNames', 'arrayConstructors'],
+		why: 'the expression tree reads HLSL type names and cannot read type[N](...)'
+	},
+	{
+		name: 'vectorConstructorArgs',
+		run: stepVectorConstructorArgs,
+		after: ['typeNames', 'arrayConstructors'],
+		why: 'the expression tree reads HLSL type names and cannot read type[N](...)'
+	},
+	{
+		name: 'broadcastConstructors',
+		run: stepBroadcastConstructors,
+		after: ['typeNames', 'arrayConstructors'],
+		why: 'the expression tree reads HLSL type names and cannot read type[N](...)'
+	},
+	{
+		name: 'diagonalMatrices',
+		run: stepDiagonalMatrices,
+		after: ['typeNames', 'arrayConstructors'],
+		why: 'the expression tree reads HLSL type names and cannot read type[N](...)'
+	},
+	{
+		name: 'textureVariants',
+		run: stepTextureVariants,
+		after: ['typeNames', 'arrayConstructors'],
+		why: 'the expression tree reads HLSL type names and cannot read type[N](...)'
+	},
+	{
+		name: 'vectorEquality',
+		run: stepVectorEquality,
+		after: ['typeNames', 'arrayConstructors'],
+		why: 'the expression tree reads HLSL type names and cannot read type[N](...)'
+	},
+	{ name: 'castsOnVectors', run: stepCastsOnVectors },
+	{ name: 'atan2', run: stepAtan2 },
+	{ name: 'textureCalls', run: stepTextureCalls },
+	{ name: 'textureGrad', run: stepTextureGrad },
+	{ name: 'textureLod', run: stepTextureLod },
+	{ name: 'texelFetch', run: stepTexelFetch },
+	{
+		name: 'glslBuiltins',
+		run: stepGlslBuiltins,
+		after: ['vectorEquality'],
+		why: 'it turns equal() and notEqual() into component-wise operators on purpose; vectorEquality must only see the comparisons the shader wrote'
+	},
+	{ name: 'switchBreaks', run: stepSwitchBreaks },
+	{ name: 'cubemapSamples', run: stepCubemapSamples },
+	{
+		name: 'cubemapLookups',
+		run: stepCubemapLookups,
+		after: ['textureCalls', 'textureLod'],
+		why: 'it looks for the tex2D and tex2Dlod calls those steps make'
+	},
+	{
+		name: 'emptyChannels',
+		run: stepEmptyChannels,
+		after: ['textureCalls', 'textureGrad', 'textureLod', 'texelFetch', 'cubemapLookups'],
+		why: 'it looks for the tex2D family calls those steps make'
+	},
+	{ name: 'clampToSaturate', run: stepClampToSaturate },
+	{ name: 'mainImageSignature', run: stepMainImageSignature },
+	{
+		name: 'mainImageBody',
+		run: stepMainImageBody,
+		after: ['mainImageSignature'],
+		why: 'it needs the parameter names of the entry point'
+	},
+	{ name: 'indentation', run: stepIndentation },
+	{ name: 'allmanBraces', run: stepAllmanBraces },
+	{
+		name: 'loopGradientTex',
+		run: stepLoopGradientTex,
+		after: ['textureCalls', 'textureLod', 'cubemapSamples', 'cubemapLookups'],
+		why: 'every tex2D call inside a loop, including the ones made above, must be promoted to tex2Dlod'
+	},
+	{
+		name: 'dropIntrinsicMacros',
+		run: stepDropIntrinsicMacros,
+		after: ['clampToSaturate'],
+		why: 'the clamp rewrite turns a saturate macro into one that calls itself, which this step then recognises'
+	},
+	{
+		name: 'hoistGlobalInits',
+		run: stepHoistGlobalInits,
+		after: ['constToStaticConst', 'staticGlobals'],
+		why: 'it looks for file-scope declarations that have been made static'
+	},
+	{
+		name: 'reorderFunctions',
+		run: stepReorderFunctions,
+		after: ['typeNames'],
+		why: 'the analysis reads HLSL type names'
+	},
+	{
+		name: 'glslHelpers',
+		run: stepGlslHelpers,
+		after: ['glslBuiltins'],
+		why: 'it looks at the finished source for calls that need a helper'
+	},
+	{
+		name: 'fragCoordDeclaration',
+		run: stepFragCoordDeclaration,
+		after: ['glFragCoord'],
+		why: 'it reads the flag that step sets'
+	},
+	{ name: 'restoreComments', run: stepRestoreComments }
+];
+
+// What is wrong with the order of a list of steps, as readable sentences (empty when it is fine)
+function checkTransformPipeline(steps)
+{
+	steps = steps || TRANSFORM_STEPS;
+	var problems = [];
+	var index = {};
+	steps.forEach(function (step, i)
+	{
+		if (index[step.name] !== undefined) { problems.push('step "' + step.name + '" appears twice'); }
+		index[step.name] = i;
+		if (typeof step.run !== 'function') { problems.push('step "' + step.name + '" has nothing to run'); }
+	});
+	steps.forEach(function (step, i)
+	{
+		var after = step.after || [];
+		after.forEach(function (other)
+		{
+			if (index[other] === undefined) { problems.push('step "' + step.name + '" must follow "' + other + '", which does not exist'); }
+			else if (index[other] >= i) { problems.push('step "' + step.name + '" must come after "' + other + '" (' + (step.why || 'no reason given') + ')'); }
+		});
+		if (after.length > 0 && !step.why) { problems.push('step "' + step.name + '" has an order that matters but gives no reason'); }
+	});
+	if (steps.length > 0 && steps[0].name !== 'extractComments') { problems.push('the first step must be "extractComments", so that no step ever sees a comment'); }
+	if (steps.length > 0 && steps[steps.length - 1].name !== 'restoreComments') { problems.push('the last step must be "restoreComments"'); }
+	return problems;
+}
+
+// Turn the GLSL of one pass into HLSL text. The work is done by the steps above, one after the other.
+function transformGLSL(src, messages, passLabel, options)
+{
+	var problems = checkTransformPipeline();
+	if (problems.length > 0) { throw new Error('ShaderBridge: the order of the transform steps is wrong: ' + problems.join('; ')); }
+
+	var ctx = {
+		src: src,
+		messages: messages,
+		options: options,
+		// In multipass, rename mainImage to avoid collisions between passes
+		mainImageName: passLabel ? 'mainImage_' + passLabel : 'mainImage',
+		outVar: 'fragColor',
+		coordVar: 'fragCoord',
+		comments: [],
+		usesGlFragCoord: false,
+		globalInits: []
+	};
+	TRANSFORM_STEPS.forEach(function (step) { step.run(ctx); });
+	return { src: ctx.src, outVar: ctx.outVar, coordVar: ctx.coordVar, mainImageName: ctx.mainImageName, globalInits: ctx.globalInits };
 }
 // ReshadeFX does not support float3(1.0) — requires float3(1.0, 1.0, 1.0).
 //
@@ -626,406 +1180,206 @@ function rewriteStructConstructors(src, messages) {
 	return result;
 }
 
-function rewriteBroadcastConstructors(src) {
-	var typePattern = /\b((?:float|vec)[234]|u?int[234])\s*\(/g;
+// ─────────────────────────────────────────────────────────────────────────────
+// Rewrite scalar broadcast constructors:  float3(x)  →  float3(x, x, x)  when x is a scalar.
+//
+// GLSL builds a vector from one scalar; ReShade FX rejects it (X3014). A single argument that is
+// itself a vector is a conversion or a copy (int2(v2), float3(v3)), which ReShade accepts, and
+// must stay as it is. Whether the argument is a scalar comes from the analyzer's type inference,
+// so a plain variable named p is looked up in its own function's scope. An argument whose type
+// cannot be determined is left alone and reported.
+// ─────────────────────────────────────────────────────────────────────────────
 
-	var sizeOf = {};
-	'float2 float3 float4 vec2 vec3 vec4 int2 int3 int4 uint2 uint3 uint4'.split(' ').forEach(function (t) {
-		sizeOf[t] = parseInt(t.slice(-1), 10);
+function rewriteBroadcastConstructors(src, messages)
+{
+	var unknown = {};
+
+	var result = rewriteExpressions(src, function (node, render)
+	{
+		if (node.kind !== 'call' || node.args.length !== 1) { return null; }
+		var target = anParseType(node.ctor || node.name);
+		if (!target || target.kind !== 'vec') { return null; }
+
+		var argType = node.args[0].type && anParseType(node.args[0].type);
+		if (!argType)
+		{
+			unknown[node.name + '(' + argLabel(node) + ')'] = true;
+			return null;
+		}
+		if (argType.kind !== 'scalar') { return null; }
+
+		var text = render(node.args[0]);
+		var parts = [];
+		for (var i = 0; i < target.rows; i++) { parts.push(text); }
+		return node.name + '(' + parts.join(', ') + ')';
 	});
 
-	// Build a set of identifiers declared as vector types (includes function params).
-	// Excludes single-char names — reused heavily across functions, cause false positives.
-	var vectorIdents = {};
-	var declRe = /\b(float[234]|int[234]|uint[234]|vec[234])\s+([a-zA-Z_]\w*)\b/g;
-	var dm;
-	while ((dm = declRe.exec(src)) !== null) {
-		if (dm[2].length > 1) { vectorIdents[dm[2]] = true; }
+	function argLabel(node)
+	{
+		return node.args[0].kind === 'ident' ? node.args[0].name : 'expression';
 	}
 
-	var result = [];
-	var lastIndex = 0;
-	var match;
-
-	while ((match = typePattern.exec(src)) !== null) {
-		var typeName = match[1];
-		var parenOpen = match.index + match[0].length - 1; // index of '('
-
-		// Walk to find the matching closing paren
-		var depth = 1;
-		var k = parenOpen + 1;
-		var commaAt1 = 0;
-
-		while (k < src.length && depth > 0) {
-			if (src[k] === '(') { depth++; }
-			else if (src[k] === ')') { depth--; }
-			else if (src[k] === ',' && depth === 1) { commaAt1++; }
-			k++;
-		}
-		// k points just past closing ')'
-
-		// Only act on single-argument constructors
-		if (commaAt1 === 0) {
-			var inner = src.slice(parenOpen + 1, k - 1).trim();
-
-			// Expand if arg looks numeric OR is a pure identifier (could be a scalar const like pi)
-			// Don't broadcast if arg itself returns a vector — detect by vector swizzle or vec type inside
-			var looksNumeric = /\d/.test(inner);
-			var isPureIdent = /^[a-zA-Z_]\w*$/.test(inner.trim());
-			var looksVector = /\.(xy|xyz|xyzw|rg|rgb|rgba)\b/.test(inner)
-				|| /\b(float[234]|vec[234]|int[234])\s*\(/.test(inner);
-
-			// For non-ident expressions: block broadcast if any identifier inside is a vector type
-			if (!looksVector && !isPureIdent) {
-				var identRe = /\b([a-zA-Z_]\w*)\b/g;
-				var im;
-				while ((im = identRe.exec(inner)) !== null) {
-					if (vectorIdents[im[1]]) { looksVector = true; break; }
-				}
-			}
-
-			if ((looksNumeric || isPureIdent) && !looksVector) {
-				var n = sizeOf[typeName];
-				var parts = [];
-				for (var p = 0; p < n; p++) { parts.push(inner); }
-				result.push(src.slice(lastIndex, match.index));
-				result.push(typeName + '(' + parts.join(', ') + ')');
-				lastIndex = k;
-				typePattern.lastIndex = lastIndex;
-				continue;
-			}
-		}
+	var unknownList = Object.keys(unknown);
+	if (messages && unknownList.length > 0)
+	{
+		messages.push({ level: 'warn', text: 'Could not tell whether the argument is a scalar in ' + unknownList.slice(0, 3).join(', ') + (unknownList.length > 3 ? ' (and ' + (unknownList.length - 3) + ' more)' : '') + '. ReShade needs a scalar spelled out, e.g. float3(x, x, x).' });
 	}
-
-	result.push(src.slice(lastIndex));
-	return result.join('');
+	if (messages && result.parseFailures > 0)
+	{
+		messages.push({ level: 'warn', text: result.parseFailures + ' expression(s) could not be analysed for scalar vector constructors; check any float2/float3/float4 built from a single scalar by hand.' });
+	}
+	return result.src;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Rewrite vector constructors whose args provide more components than needed.
-// e.g. float3(Z.z, 0, -Z)  where -Z is a float3 → float3(Z.z, 0, -Z.x)
-// Strategy: for each arg, estimate its component count:
-//   • float2/3/4 constructor or swizzle .xy/.xyz/.xyzw → 2/3/4
-//   • anything else → 1
-// Then truncate / swizzle the last overflowing arg to fit.
+// Rewrite vector constructors whose arguments provide more components than needed.
+// GLSL lets the last argument overflow; HLSL does not.
+// e.g. float3(Z.z, 0, -Z)  where -Z is a float3  →  float3(Z.z, 0, -Z.x)
+//
+// Each argument's component count comes from the analyzer's type inference (a scalar is 1,
+// a floatN is N), so names like x or p are looked up in their own function's scope rather than
+// guessed. The overflowing vector argument is cut down with a swizzle and any further
+// arguments are dropped. A constructor with an argument of unknown type is left alone.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function rewriteVectorConstructorArgs(src) {
-	var sizeOf = { float2: 2, float3: 3, float4: 4, int2: 2, int3: 3, int4: 4, uint2: 2, uint3: 3, uint4: 4 };
-	var swizzleLen = { x: 1, y: 1, z: 1, w: 1, r: 1, g: 1, b: 1, a: 1, xy: 2, xz: 2, yz: 2, rg: 2, rb: 2, gb: 2, xyz: 3, xyw: 3, rgb: 3, xyzw: 4, rgba: 4 };
-	var swizzleNames = ['x', 'y', 'z', 'w'];
+function rewriteVectorConstructorArgs(src, messages)
+{
+	var swizzle = ['x', 'y', 'z', 'w'];
 
-	// Build a map of identifier → component count from declarations in source
-	// Handles both  float3 Z = ...  and chained  float3 p = P(T), Z = ...
-	var varSize = {};
-	var declRe = /\b(float[234]|int[234]|uint[234])\s+([a-zA-Z_]\w*)\b/g;
-	var dm;
-	while ((dm = declRe.exec(src)) !== null) {
-		var declType = dm[1];
-		var declSize = sizeOf[declType];
-		if (!sizeOf[dm[2]]) { varSize[dm[2]] = declSize; }
-
-		// Walk forward past the declaration statement collecting chained names
-		// Must handle balanced parens in initialisers like p = P(T), Z = ...
-		var pos = dm.index + dm[0].length;
-		var depth = 0;
-		while (pos < src.length) {
-			var ch = src[pos];
-			if (ch === '(' || ch === '[') { depth++; }
-			else if (ch === ')' || ch === ']') {
-				depth--;
-				if (depth < 0) { break; } // exited surrounding scope (e.g. function params)
-			}
-			else if ((ch === ';' || ch === '{' || ch === '}') && depth === 0) { break; }
-			else if (ch === ',' && depth === 0) {
-				// Find next real identifier after comma, skipping whitespace and placeholders
-				var rest = src.slice(pos + 1);
-				var ident = null;
-				var restPos = 0;
-				// Skip any number of placeholder tokens and whitespace
-				while (restPos < rest.length) {
-					var m = rest.slice(restPos).match(/^\s*(«[⁰¹²³⁴⁵⁶⁷⁸⁹]+»\s*)?([a-zA-Z_]\w*)/);
-					if (!m) { break; }
-					var candidate = m[2];
-					restPos += m[0].length;
-					if (!/«/.test(candidate)) {
-						ident = candidate;
-						break;
-					}
-				}
-				if (ident && !sizeOf[ident]) { varSize[ident] = declSize; }
-			}
-			pos++;
-		}
+	function components(type)
+	{
+		var parsed = anParseType(type);
+		return parsed.kind === 'scalar' ? 1 : parsed.rows * parsed.cols;
 	}
 
-	function estimateComponents(expr) {
-		expr = expr.trim();
-		// swizzle at end — most reliable indicator
-		var sw = expr.match(/\.([xyzwrgba]+)$/);
-		if (sw && swizzleLen[sw[1]] !== undefined) { return swizzleLen[sw[1]]; }
-		// vector constructor at start (after optional unary)
-		var stripped = expr.replace(/^[\s\-+!]+/, '');
-		var ct = stripped.match(/^(float[234]|int[234]|uint[234])\s*\(/);
-		if (ct) { return sizeOf[ct[1]]; }
-		// swizzle on stripped
-		var sw2 = stripped.match(/\.([xyzwrgba]+)$/);
-		if (sw2 && swizzleLen[sw2[1]] !== undefined) { return swizzleLen[sw2[1]]; }
-		// bare identifier lookup — ONLY if expression is just an identifier
-		// (no operators that would reduce it to a scalar)
-		if (/^[a-zA-Z_]\w*$/.test(stripped)) {
-			if (varSize[stripped] !== undefined) { return varSize[stripped]; }
-		}
-		return 1;
+	// Apply a swizzle to an argument. A swizzle binds tighter than any operator, so anything
+	// other than a primary expression needs parentheses first.
+	function swizzled(node, render, swz)
+	{
+		if (node.kind === 'unary') { return node.op + swizzled(node.child, render, swz); }
+		var primary = node.kind === 'ident' || node.kind === 'call' || node.kind === 'member' || node.kind === 'index' || node.kind === 'paren';
+		return (primary ? render(node) : '(' + render(node) + ')') + '.' + swz;
 	}
 
-	function splitArgs(inner) {
-		var args = [];
-		var depth = 0;
-		var start = 0;
-		for (var i = 0; i < inner.length; i++) {
-			if (inner[i] === '(' || inner[i] === '[') { depth++; }
-			else if (inner[i] === ')' || inner[i] === ']') { depth--; }
-			else if (inner[i] === ',' && depth === 0) {
-				args.push(inner.slice(start, i).trim());
-				start = i + 1;
+	var result = rewriteExpressions(src, function (node, render)
+	{
+		if (node.kind !== 'call') { return null; }
+		var target = anParseType(node.ctor || node.name);
+		if (!target || target.kind !== 'vec') { return null; }
+		if (node.args.some(function (arg) { return !arg.type || !anParseType(arg.type); })) { return null; }
+
+		var total = node.args.reduce(function (sum, arg) { return sum + components(arg.type); }, 0);
+		if (total <= target.rows) { return null; }
+
+		var parts = [];
+		var used = 0;
+		for (var i = 0; i < node.args.length && used < target.rows; i++)
+		{
+			var arg = node.args[i];
+			var count = components(arg.type);
+			var remaining = target.rows - used;
+			if (count <= remaining) { parts.push(render(arg)); used += count; }
+			else
+			{
+				var isVector = anParseType(arg.type).kind === 'vec';
+				parts.push(isVector ? swizzled(arg, render, swizzle.slice(0, remaining).join('')) : render(arg));
+				used += remaining;
 			}
 		}
-		args.push(inner.slice(start).trim());
-		return args;
-	}
-
-	var typePattern = /\b(float[234]|int[234]|uint[234])\s*\(/g;
-	var result = [];
-	var lastIndex = 0;
-	var match;
-
-	while ((match = typePattern.exec(src)) !== null) {
-		var typeName = match[1];
-		var target = sizeOf[typeName];
-		var parenOpen = match.index + match[0].length - 1;
-
-		// Skip if this match is on a #define line
-		var lineStart = src.lastIndexOf('\n', match.index) + 1;
-		if (/^\s*#define\b/.test(src.slice(lineStart, match.index + match[0].length))) { continue; }
-		var depth = 1;
-		var k = parenOpen + 1;
-
-		while (k < src.length && depth > 0) {
-			if (src[k] === '(') { depth++; }
-			else if (src[k] === ')') { depth--; }
-			k++;
-		}
-
-		var inner = src.slice(parenOpen + 1, k - 1);
-		var args = splitArgs(inner);
-
-		// Count total components — skip comment placeholders
-		// A placeholder may have been merged with a real arg via newline — split them
-		var total = 0;
-		var realArgs = [];
-		args.forEach(function (a) {
-			// If arg contains a placeholder, split on newline and take the non-placeholder parts
-			if (/«/.test(a)) {
-				a.split('\n').forEach(function (part) {
-					part = part.trim();
-					if (part && !/«/.test(part)) {
-						realArgs.push(part);
-						total += estimateComponents(part);
-					}
-				});
-			}
-			else {
-				realArgs.push(a);
-				total += estimateComponents(a);
-			}
-		});
-
-		if (total <= target) {
-			// nothing to fix
-			continue;
-		}
-
-		// Rebuild args trimming/swizzling to exactly target components
-		var newArgs = [];
-		var consumed = 0;
-
-		for (var ai = 0; ai < realArgs.length && consumed < target; ai++) {
-			var argExpr = realArgs[ai];
-			var argSize = estimateComponents(argExpr);
-			var remaining = target - consumed;
-
-			if (argSize <= remaining) {
-				newArgs.push(argExpr);
-				consumed += argSize;
-			}
-			else {
-				// Need to take only `remaining` components from this arg
-				// Use swizzle if arg is multi-component, otherwise just use it
-				if (argSize > 1) {
-					var sw = swizzleNames.slice(0, remaining).join('');
-					newArgs.push(argExpr + '.' + sw);
-				}
-				else {
-					newArgs.push(argExpr);
-				}
-				consumed += remaining;
-			}
-		}
-
-		result.push(src.slice(lastIndex, match.index));
-		result.push(typeName + '(' + newArgs.join(', ') + ')');
-		lastIndex = k;
-		typePattern.lastIndex = lastIndex;
-	}
-
-	result.push(src.slice(lastIndex));
-	return result.join('');
-}
-// Only when the RHS contains a matrix constructor or matrix-type macro call.
-// Matches: mat2(...), mat3(...), mat4(...), float2x2(...), float3x3(...),
-//          float4x4(...), and single-identifier macros that expand to matrices
-//          (heuristic: uppercase single-letter calls like R(...), M(...)).
-// ─────────────────────────────────────────────────────────────────────────────
-
-function rewriteMatrixMulAssign(src) {
-	// Build set of identifiers declared as matrix types
-	var matIdents = {};
-	var declRe = /\b(?:static\s+)?(float[234]x[234]|mat[234])\s+([a-zA-Z_]\w*)\b/g;
-	var dm;
-	while ((dm = declRe.exec(src)) !== null) { matIdents[dm[2]] = true; }
-
-	var matRhsPattern = /\b([\w.]+)\s*\*=\s*([^;]+);/g;
-	return src.replace(matRhsPattern, function (match, lhs, rhs) {
-		var trimmed = rhs.trim();
-		var looksLikeMatrix = /\b(mat[234]|float[234]x[234])\b/.test(trimmed)
-			|| /^(float[234]x[234])\s*\(/.test(trimmed)
-			|| (matIdents[trimmed] === true);
-		if (looksLikeMatrix) {
-			return lhs + ' = mul(' + trimmed + ', ' + lhs + ');';
-		}
-		return match;
+		return node.name + '(' + parts.join(', ') + ')';
 	});
+
+	if (messages && result.parseFailures > 0)
+	{
+		messages.push({ level: 'warn', text: result.parseFailures + ' expression(s) could not be analysed for over-long vector constructors; check any float2/float3/float4 built from a longer vector by hand.' });
+	}
+	return result.src;
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// == and != on vectors.
+//
+// In GLSL a == b on two vectors is one boolean: all components equal. In HLSL it is a vector of
+// booleans, which an if or a && cannot take (X3019). So
+//
+//   a == b  →  all(a == b)        a != b  →  any(a != b)
+//
+// Only comparisons the shader wrote are changed: the component-wise operators that equal() and
+// notEqual() become later (rewriteGlslBuiltins) are meant to give a vector and are left alone, which
+// is why this runs first. The analyzer types every comparison as a single bool, as GLSL does.
+// Matrices are not handled: ReShade FX has no all() or any() for them, so such a comparison is left
+// as it is and reported.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function rewriteVectorEquality(src, messages)
+{
+	if (!/[=!]=/.test(src)) { return src; }
+	function kindOf(type)
+	{
+		var parsed = type && anParseType(type);
+		return parsed ? parsed.kind : null;
+	}
+
+	var matrixCompares = 0;
+	var result = rewriteExpressions(src, function (node, render)
+	{
+		if (node.kind !== 'binary' || (node.op !== '==' && node.op !== '!=')) { return null; }
+		if (kindOf(node.left.type) === 'mat' || kindOf(node.right.type) === 'mat') { matrixCompares++; return null; }
+		if (kindOf(node.left.type) !== 'vec' && kindOf(node.right.type) !== 'vec') { return null; }
+		return (node.op === '==' ? 'all(' : 'any(') + render(node.left) + ' ' + node.op + ' ' + render(node.right) + ')';
+	});
+
+	if (messages && matrixCompares > 0)
+	{
+		messages.push({ level: 'warn', text: 'ReShade FX cannot compare whole matrices with == or !=; ' + matrixCompares + ' such comparison(s) were left as they are. Compare the rows by hand.' });
+	}
+	if (messages && result.parseFailures > 0)
+	{
+		messages.push({ level: 'warn', text: result.parseFailures + ' expression(s) could not be analysed for vector comparisons; check any == or != on vectors in this pass by hand.' });
+	}
+	return result.src;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Rewrite  expr * matNxN(...)  →  mul(expr, matNxN(...))
-// Handles inline matrix multiplies (not just *=).
+// Rewrite matrix multiplies:  a * b  →  mul(b, a)  when either operand is a matrix,
+// and  v *= M  →  v = mul(M, v).
+//
+// HLSL fills a matrix row by row, GLSL column by column, so for the same constructor
+// arguments GLSL M*v is HLSL mul(v, M), and GLSL v*M is mul(M, v). The rule is the same in
+// both directions: if one operand of * is a matrix, emit mul(right, left). That also
+// covers matrix * matrix.
+//
+// Which operands are matrices comes from the analyzer's type inference (variables,
+// constructors, matrix-returning functions, nested expressions), and the expression tree
+// gives operator precedence, so chains such as  a * b * M * v  need no special handling.
+// Expressions whose operand types cannot be determined are left alone.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function rewriteInlineMatrixMul(src) {
-	// Pass 1: v * floatNxN(...) → mul(floatNxN(...), v)
-	var pattern = /(\)|\b\w+)\s*\*\s*(float[234]x[234])\s*\(/g;
-	var result = [];
-	var last = 0;
-	var match;
-
-	while ((match = pattern.exec(src)) !== null) {
-		var mulPos = match.index + match[1].length;
-		while (mulPos < src.length && src[mulPos] !== '*') { mulPos++; }
-
-		var lhsEnd = mulPos - 1;
-		while (lhsEnd >= 0 && src[lhsEnd] === ' ') { lhsEnd--; }
-
-		var lhsStart;
-		if (src[lhsEnd] === ')') {
-			var depth = 1;
-			var k = lhsEnd - 1;
-			while (k >= 0 && depth > 0) {
-				if (src[k] === ')') { depth++; }
-				else if (src[k] === '(') { depth--; }
-				k--;
-			}
-			while (k >= 0 && /[\w.]/.test(src[k])) { k--; }
-			lhsStart = k + 1;
-		}
-		else {
-			var k = lhsEnd;
-			while (k >= 0 && /[\w.]/.test(src[k])) { k--; }
-			lhsStart = k + 1;
-		}
-
-		var rhsTypeStart = mulPos + 1;
-		while (rhsTypeStart < src.length && src[rhsTypeStart] === ' ') { rhsTypeStart++; }
-		var parenPos = src.indexOf('(', rhsTypeStart);
-		var depth2 = 1;
-		var j = parenPos + 1;
-		while (j < src.length && depth2 > 0) {
-			if (src[j] === '(') { depth2++; }
-			else if (src[j] === ')') { depth2--; }
-			j++;
-		}
-		var lhs = src.slice(lhsStart, lhsEnd + 1).trim();
-		var rhs = src.slice(rhsTypeStart, j).trim();
-
-		result.push(src.slice(last, lhsStart));
-		result.push('mul(' + rhs + ', ' + lhs + ')');  // flip: GLSL v*M = HLSL mul(M,v)
-		last = j;
-		pattern.lastIndex = last;
+function rewriteInlineMatrixMul(src, messages)
+{
+	function isMatrix(type)
+	{
+		var parsed = type && anParseType(type);
+		return !!parsed && parsed.kind === 'mat';
 	}
 
-	result.push(src.slice(last));
-	src = result.join('');
-
-	// Pass 2: floatNxN(...) * expr  →  mul(floatNxN(...), expr)
-	// M*v in GLSL column-major = mul(M, v) in HLSL
-	var result2 = [];
-	var last2 = 0;
-	var pattern2 = /\b(float[234]x[234])\s*\(/g;
-
-	while ((match = pattern2.exec(src)) !== null) {
-		// Skip #define lines
-		var lineStart2 = src.lastIndexOf('\n', match.index) + 1;
-		if (/^\s*#define\b/.test(src.slice(lineStart2, match.index + match[0].length))) { continue; }
-
-		// Walk forward to end of matrix constructor
-		var parenOpen = match.index + match[0].length - 1;
-		var depth3 = 1;
-		var k2 = parenOpen + 1;
-		while (k2 < src.length && depth3 > 0) {
-			if (src[k2] === '(') { depth3++; }
-			else if (src[k2] === ')') { depth3--; }
-			k2++;
+	var result = rewriteExpressions(src, function (node, render)
+	{
+		if (node.kind === 'binary' && node.op === '*' && (isMatrix(node.left.type) || isMatrix(node.right.type)))
+		{
+			return 'mul(' + render(node.right) + ', ' + render(node.left) + ')';
 		}
-		// k2 points past closing ) of matrix constructor
-		// Check if followed by * 
-		var afterClose = src.slice(k2).match(/^(\s*\*\s*)/);
-		if (!afterClose) { continue; }
-
-		var starEnd = k2 + afterClose[1].length;
-
-		// Walk forward to find end of RHS — either a paren expression or identifier chain
-		var rhsStart = starEnd;
-		var rhsEnd;
-		if (src[rhsStart] === '(') {
-			// parenthesised expression — walk to matching )
-			var depth4 = 1;
-			var k3 = rhsStart + 1;
-			while (k3 < src.length && depth4 > 0) {
-				if (src[k3] === '(') { depth4++; }
-				else if (src[k3] === ')') { depth4--; }
-				k3++;
-			}
-			rhsEnd = k3;
+		if (node.kind === 'assign' && node.op === '*=' && (isMatrix(node.left.type) || isMatrix(node.right.type)))
+		{
+			return render(node.left) + ' = mul(' + render(node.right) + ', ' + render(node.left) + ')';
 		}
-		else {
-			// identifier or member chain
-			var k3 = rhsStart;
-			while (k3 < src.length && /[\w.]/.test(src[k3])) { k3++; }
-			rhsEnd = k3;
-		}
+		return null;
+	});
 
-		var matExpr = src.slice(match.index, k2).trim();
-		var rhsExpr = src.slice(rhsStart, rhsEnd).trim();
-
-		result2.push(src.slice(last2, match.index));
-		result2.push('mul(' + matExpr + ', ' + rhsExpr + ')');
-		last2 = rhsEnd;
-		pattern2.lastIndex = last2;
+	if (messages && result.parseFailures > 0)
+	{
+		messages.push({ level: 'warn', text: result.parseFailures + ' expression(s) could not be analysed for matrix multiplication; check any matrix * vector in this pass by hand.' });
 	}
-
-	result2.push(src.slice(last2));
-	return result2.join('');
+	return result.src;
 }
 // Single-argument atan(x) is left unchanged.
 // Uses a character-walk to correctly handle nested parentheses.
@@ -1150,6 +1504,181 @@ function rewriteMainBody(src, messages, outVar, coordVar, fnName) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Walk balanced parens from the position of '(' and return { samp, args[], end }
+// where samp is the first argument and args[] are the top-level comma-separated
+// arguments after it. end is just past the closing ')'. Returns null if there is
+// only one argument. Commas inside nested parentheses are not split.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function splitCallArgs(s, parenPos)
+{
+	var depth = 1;
+	var k = parenPos + 1;
+	var commas = [];
+	while (k < s.length && depth > 0)
+	{
+		if (s[k] === '(') { depth++; }
+		else if (s[k] === ')') { depth--; }
+		else if (s[k] === ',' && depth === 1) { commas.push(k); }
+		k++;
+	}
+	if (commas.length === 0) { return null; } // malformed
+	var samp = s.slice(parenPos + 1, commas[0]).trim();
+	var rest = [];
+	for (var ci = 0; ci < commas.length; ci++)
+	{
+		var from = commas[ci] + 1;
+		var to   = ci + 1 < commas.length ? commas[ci + 1] : k - 1;
+		rest.push(s.slice(from, to).trim());
+	}
+	return { samp: samp, args: rest, end: k };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rewrite texel fetches.
+//   texelFetch(s, p, lod)  →  tex2Dfetch(s, p, lod)   (a literal lod of 0 is the default and is dropped)
+//   textureSize(s, lod)    →  tex2Dsize(s, lod)
+// Both fetch by integer texel position. Buffers keep Shadertoy's row order, so a fetch from a
+// buffer needs no flip; textures with a Vflip option are handled later by rewriteTextureVFlip.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function rewriteTexelFetch(src)
+{
+	var result = [];
+	var last = 0;
+	var re = /\btexelFetch\s*\(/g;
+	var m;
+	while ((m = re.exec(src)) !== null)
+	{
+		var parsed = splitCallArgs(src, m.index + m[0].length - 1);
+		if (!parsed || parsed.args.length < 1) { continue; }
+		var args = [parsed.samp, parsed.args[0]];
+		if (parsed.args.length > 1 && parsed.args[1] !== '0') { args.push(parsed.args[1]); }
+		result.push(src.slice(last, m.index));
+		result.push('tex2Dfetch(' + args.join(', ') + ')');
+		last = parsed.end;
+		re.lastIndex = last;
+	}
+	result.push(src.slice(last));
+	return result.join('').replace(/\btextureSize\s*\(/g, 'tex2Dsize(');
+}
+
+var CUBEMAP_HELPER_SOURCE =
+	'// ST_cubemap_uv: maps a direction vector to a 2D UV in a 6-face horizontal strip.\n'
+	+ '// Face order (left to right): +X, -X, +Y, -Y, +Z, -Z\n'
+	+ 'float2 ST_cubemap_uv(float3 d)\n'
+	+ '{\n'
+	+ '\tfloat3 a = abs(d);\n'
+	+ '\tfloat face;\n'
+	+ '\tfloat2 uv;\n'
+	+ '\tif (a.x >= a.y && a.x >= a.z)\n'
+	+ '\t{\n'
+	+ '\t\tface = d.x > 0.0 ? 0.0 : 1.0;\n'
+	+ '\t\tuv   = d.x > 0.0 ? float2(-d.z, -d.y) / a.x\n'
+	+ '\t\t                  : float2( d.z, -d.y) / a.x;\n'
+	+ '\t}\n'
+	+ '\telse if (a.y >= a.z)\n'
+	+ '\t{\n'
+	+ '\t\tface = d.y > 0.0 ? 2.0 : 3.0;\n'
+	+ '\t\tuv   = d.y > 0.0 ? float2( d.x,  d.z) / a.y\n'
+	+ '\t\t                  : float2( d.x, -d.z) / a.y;\n'
+	+ '\t}\n'
+	+ '\telse\n'
+	+ '\t{\n'
+	+ '\t\tface = d.z > 0.0 ? 4.0 : 5.0;\n'
+	+ '\t\tuv   = d.z > 0.0 ? float2( d.x, -d.y) / a.z\n'
+	+ '\t\t                  : float2(-d.x, -d.y) / a.z;\n'
+	+ '\t}\n'
+	+ '\tuv = uv * 0.5 + 0.5;\n'
+	+ '\tuv.x = (uv.x + face) * (1.0 / 6.0);\n'
+	+ '\treturn uv;\n'
+	+ '}\n';
+
+// Put the ST_cubemap_uv() helper in front of the source when it is used and not yet defined
+function injectCubemapHelper(src)
+{
+	if (!/\bST_cubemap_uv\s*\(/.test(src) || /float2\s+ST_cubemap_uv\s*\(/.test(src)) { return src; }
+	return CUBEMAP_HELPER_SOURCE + '\n' + src;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rewrite cubemap lookups made with texture() / textureLod().
+//
+// A Shadertoy cubemap is sampled with the ordinary  texture(samp, vec3 dir)  but ReShade has the six
+// faces side by side in one 2D strip, so the direction must go through ST_cubemap_uv. A lookup is a
+// cubemap lookup when its sampler is a cubemap channel (the UI says which) or when its coordinate is
+// a three-component vector, which a 2D texture never takes; the second rule also covers a samplerCube
+// function parameter. Without this the third component is silently dropped and the wrong texel read.
+//
+//   tex2D(s, dir)                         →  tex2D(s, ST_cubemap_uv(dir))
+//   tex2Dlod(s, float4(dir, 0.0, lod))    →  tex2Dlod(s, float4(ST_cubemap_uv(dir), 0.0, lod))
+// ─────────────────────────────────────────────────────────────────────────────
+
+function rewriteCubemapLookups(src, cubemapSamplers, messages)
+{
+	src = src.replace(/\bsamplerCube\b/g, 'sampler2D');
+	if (!/\btex2D(?:lod|bias|grad)?\s*\(/.test(src)) { return src; }
+
+	var count = 0;
+	var unsupported = {};
+	var result = rewriteExpressions(src, function (node, render)
+	{
+		if (node.kind !== 'call' || node.args.length < 2) { return null; }
+		if (node.name !== 'tex2D' && node.name !== 'tex2Dlod' && node.name !== 'tex2Dgrad' && node.name !== 'tex2Dbias') { return null; }
+		var cubeSampler = node.args[0].kind === 'ident' && cubemapSamplers.indexOf(node.args[0].name) !== -1;
+		var coord = node.args[1];
+		var type = coord.type && anParseType(coord.type);
+
+		if (node.name === 'tex2D' || node.name === 'tex2Dgrad')
+		{
+			var isDirection = (type && type.kind === 'vec' && type.rows === 3) || (cubeSampler && !type);
+			if (!isDirection) { return null; }
+			if (node.name === 'tex2Dgrad') { unsupported['tex2Dgrad'] = true; }
+			count++;
+			return 'tex2D(' + render(node.args[0]) + ', ST_cubemap_uv(' + render(coord) + '))';
+		}
+
+		if (node.name === 'tex2Dlod')
+		{
+			var ctor = coord.kind === 'call' && coord.name === 'float4' && coord.args.length >= 2 && coord.args.length <= 3;
+			var first = ctor && coord.args[0].type && anParseType(coord.args[0].type);
+			if (ctor && first && first.kind === 'vec' && first.rows === 3)
+			{
+				var lod = render(coord.args[coord.args.length - 1]);
+				count++;
+				return 'tex2Dlod(' + render(node.args[0]) + ', float4(ST_cubemap_uv(' + render(coord.args[0]) + '), 0.0, ' + lod + ')' + (node.args.length > 2 ? ', ' + render(node.args[2]) : '') + ')';
+			}
+			if (cubeSampler && !ctor)
+			{
+				var c = render(coord);
+				var wrapped = /^[\w.]+$/.test(c) ? c : '(' + c + ')';
+				count++;
+				return 'tex2Dlod(' + render(node.args[0]) + ', float4(ST_cubemap_uv(' + wrapped + '.xyz), 0.0, ' + wrapped + '.w)' + (node.args.length > 2 ? ', ' + render(node.args[2]) : '') + ')';
+			}
+			return null;
+		}
+
+		// tex2Dbias on a cubemap sampler is not translated
+		if (cubeSampler) { unsupported['tex2Dbias'] = true; }
+		return null;
+	});
+
+	if (messages && count > 0)
+	{
+		messages.push({ level: 'info', text: count + ' cubemap lookup(s) made with texture() / textureLod() rewritten to use ST_cubemap_uv().' });
+	}
+	if (messages && unsupported['tex2Dgrad'])
+	{
+		messages.push({ level: 'warn', text: 'A cubemap lookup with explicit gradients (textureGrad) was turned into a plain lookup; the gradients cannot be mapped onto the strip.' });
+	}
+	if (messages && unsupported['tex2Dbias'])
+	{
+		messages.push({ level: 'warn', text: 'A cubemap lookup with a bias was not translated; check it by hand.' });
+	}
+	return injectCubemapHelper(result.src);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Rewrite textureCube / textureCubeLod calls to tex2D with UV helper
 //
 // GLSL:  textureCube(samp, dir)          → tex2D(samp, ST_cubemap_uv(dir))
@@ -1168,35 +1697,6 @@ function rewriteCubemapSamples(src, messages)
 	var hasCubeLod = /\btextureCubeLod\s*\(/.test(src);
 	if (!hasCube && !hasCubeLod) { return src; }
 
-	// Helper: walk balanced parens from position of '(' and return { samp, args[], end }
-	// where args[] are the top-level comma-separated arguments after the sampler.
-	function splitCubeArgs(s, parenPos)
-	{
-		var depth = 1;
-		var k = parenPos + 1;
-		var sampEnd = -1;
-		// collect top-level comma positions
-		var commas = [];
-		while (k < s.length && depth > 0)
-		{
-			if (s[k] === '(') { depth++; }
-			else if (s[k] === ')') { depth--; }
-			else if (s[k] === ',' && depth === 1) { commas.push(k); }
-			k++;
-		}
-		// k is now just past closing ')'
-		if (commas.length === 0) { return null; } // malformed
-		var samp = s.slice(parenPos + 1, commas[0]).trim();
-		var rest  = [];
-		for (var ci = 0; ci < commas.length; ci++)
-		{
-			var from = commas[ci] + 1;
-			var to   = ci + 1 < commas.length ? commas[ci + 1] : k - 1;
-			rest.push(s.slice(from, to).trim());
-		}
-		return { samp: samp, args: rest, end: k };
-	}
-
 	// Rewrite all textureCube(samp, dir) occurrences
 	if (hasCube)
 	{
@@ -1207,7 +1707,7 @@ function rewriteCubemapSamples(src, messages)
 		while ((m = re.exec(src)) !== null)
 		{
 			var parenPos = m.index + m[0].length - 1;
-			var parsed   = splitCubeArgs(src, parenPos);
+			var parsed   = splitCallArgs(src, parenPos);
 			if (!parsed) { continue; }
 			result.push(src.slice(last, m.index));
 			result.push('tex2D(' + parsed.samp + ', ST_cubemap_uv(' + parsed.args[0] + '))');
@@ -1228,7 +1728,7 @@ function rewriteCubemapSamples(src, messages)
 		while ((m = re.exec(src)) !== null)
 		{
 			var parenPos = m.index + m[0].length - 1;
-			var parsed   = splitCubeArgs(src, parenPos);
+			var parsed   = splitCallArgs(src, parenPos);
 			if (!parsed || parsed.args.length < 2) { continue; }
 			var dir = parsed.args[0];
 			var lod = parsed.args[1];
@@ -1241,41 +1741,1257 @@ function rewriteCubemapSamples(src, messages)
 		src = result.join('');
 	}
 
-	// Inject ST_cubemap_uv() helper at the top of the source (before any user code).
-	// The helper maps a direction vector to a 2D UV in a horizontal 6-face strip.
-	var helper =
-		'// ST_cubemap_uv: maps a direction vector to a 2D UV in a 6-face horizontal strip.\n'
-		+ '// Face order (left to right): +X, -X, +Y, -Y, +Z, -Z\n'
-		+ 'float2 ST_cubemap_uv(float3 d)\n'
-		+ '{\n'
-		+ '\tfloat3 a = abs(d);\n'
-		+ '\tfloat face;\n'
-		+ '\tfloat2 uv;\n'
-		+ '\tif (a.x >= a.y && a.x >= a.z)\n'
-		+ '\t{\n'
-		+ '\t\tface = d.x > 0.0 ? 0.0 : 1.0;\n'
-		+ '\t\tuv   = d.x > 0.0 ? float2(-d.z, -d.y) / a.x\n'
-		+ '\t\t                  : float2( d.z, -d.y) / a.x;\n'
-		+ '\t}\n'
-		+ '\telse if (a.y >= a.z)\n'
-		+ '\t{\n'
-		+ '\t\tface = d.y > 0.0 ? 2.0 : 3.0;\n'
-		+ '\t\tuv   = d.y > 0.0 ? float2( d.x,  d.z) / a.y\n'
-		+ '\t\t                  : float2( d.x, -d.z) / a.y;\n'
-		+ '\t}\n'
-		+ '\telse\n'
-		+ '\t{\n'
-		+ '\t\tface = d.z > 0.0 ? 4.0 : 5.0;\n'
-		+ '\t\tuv   = d.z > 0.0 ? float2( d.x, -d.y) / a.z\n'
-		+ '\t\t                  : float2(-d.x, -d.y) / a.z;\n'
-		+ '\t}\n'
-		+ '\tuv = uv * 0.5 + 0.5;\n'
-		+ '\tuv.x = (uv.x + face) * (1.0 / 6.0);\n'
-		+ '\treturn uv;\n'
-		+ '}\n';
-
-	src = helper + '\n' + src;
+	src = injectCubemapHelper(src);
 
 	messages.push({ level: 'info', text: 'textureCube() rewritten to tex2D() + ST_cubemap_uv() helper (horizontal 6-face strip, +X/-X/+Y/-Y/+Z/-Z order).' });
 	return src;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Flip V at the sample sites of textures with a Vflip option.
+//
+// Shadertoy uploads such textures upside-down, so v = 0 is the bottom row of the image; in
+// ReShade v = 0 is the top row. samplerFlags maps a sampler name (iChannel0 ...) to the
+// expression that says whether to flip it, normally a preprocessor definition the user can
+// change in ReShade. For every texture call on such a sampler the V coordinate is conditionally
+// mirrored:  tex2D(s, uv)  →  tex2D(s, ST_flipV(uv, FLAG)).
+//
+// A sampler can also be handed to a user function (blur(iChannel0, uv) → sampler2D sp inside it).
+// The flag travels with it: every sampler2D parameter gets a following  bool <name>_vflip
+// parameter, every call passes the flag of its sampler argument (false for samplers without
+// the option), and the sample sites inside the function use that parameter.
+//
+// Returns { src, count, helpers, warnings }. helpers says which ST_flip* functions the result
+// uses, so the caller can emit their definitions.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function rewriteTextureVFlip(src, samplerFlags)
+{
+	var helpers = { v2: false, v4: false, dir: false, fetch: false };
+	var warnings = [];
+	if (Object.keys(samplerFlags).length === 0) { return { src: src, count: 0, helpers: helpers, warnings: warnings }; }
+
+	var A = analyzeSource(src);
+	var warned = {};
+	var count = 0;
+
+	function warnOnce(key, text)
+	{
+		if (!warned[key]) { warned[key] = true; warnings.push(text); }
+	}
+
+	function enclosingFunction(sigIndex)
+	{
+		var names = Object.keys(A.functions);
+		for (var i = 0; i < names.length; i++)
+		{
+			var list = A.functions[names[i]];
+			for (var j = 0; j < list.length; j++)
+			{
+				if (list[j].bodyFrom !== undefined && sigIndex >= list[j].bodyFrom && sigIndex <= list[j].bodyTo) { return list[j]; }
+			}
+		}
+		return null;
+	}
+
+	function isSamplerParam(fn, name)
+	{
+		if (!fn) { return false; }
+		for (var i = 0; i < fn.params.length; i++)
+		{
+			if (fn.params[i].name === name && fn.params[i].type === 'sampler2D') { return true; }
+		}
+		return false;
+	}
+
+	// User functions that take sampler2D parameters: name → indices of those parameters
+	var samplerParams = {};
+	Object.keys(A.functions).forEach(function (name)
+	{
+		A.functions[name].forEach(function (fn)
+		{
+			fn.params.forEach(function (param, k)
+			{
+				if (param.type !== 'sampler2D') { return; }
+				samplerParams[name] = samplerParams[name] || [];
+				if (samplerParams[name].indexOf(k) === -1) { samplerParams[name].push(k); }
+			});
+		});
+	});
+
+	// The flag expression for a sampler argument: 'false' when it has no Vflip option,
+	// null when the argument is not a plain name and so cannot be traced.
+	function flagOf(arg, fn)
+	{
+		if (!arg || arg.kind !== 'ident') { return null; }
+		if (isSamplerParam(fn, arg.name)) { return arg.name + '_vflip'; }
+		return samplerFlags[arg.name] !== undefined ? samplerFlags[arg.name] : 'false';
+	}
+
+	var result = rewriteExpressions(src, function (node, render)
+	{
+		if (node.kind !== 'call') { return null; }
+		var fn = enclosingFunction(node.from);
+		var quiet = A.isDead(node); // no warnings about code in a dead #if branch
+
+		// a call to a user function that takes samplers: pass each sampler's flag along with it
+		if (samplerParams[node.name])
+		{
+			var passed = [];
+			node.args.forEach(function (arg, k)
+			{
+				passed.push(render(arg));
+				if (samplerParams[node.name].indexOf(k) === -1) { return; }
+				var flag = flagOf(arg, fn);
+				if (flag === null)
+				{
+					if (!quiet) { warnOnce('trace:' + node.name, 'A sampler passed to ' + node.name + '() is not a plain name, so its Vflip cannot be followed; it is treated as not flipped.'); }
+					flag = 'false';
+				}
+				passed.push(flag);
+			});
+			return node.name + '(' + passed.join(', ') + ')';
+		}
+
+		var isSample = node.name === 'tex2D' || node.name === 'tex2Dlod' || node.name === 'tex2Dbias' || node.name === 'tex2Dgrad';
+		var isFetch = node.name === 'tex2Dfetch';
+		var isUnsupported = node.name === 'tex2Dproj' || node.name === 'texelFetch';
+		if ((!isSample && !isFetch && !isUnsupported) || !node.args.length) { return null; }
+
+		var flag = flagOf(node.args[0], fn);
+		if (flag === null)
+		{
+			if (!quiet) { warnOnce('trace:' + node.name, node.name + '() on a sampler that is not a plain name: its Vflip cannot be followed, so V is not flipped there.'); }
+			return null;
+		}
+		if (flag === 'false') { return null; }
+		if (isUnsupported)
+		{
+			if (!quiet) { warnOnce('unsupported:' + node.name, node.name + '() on a Vflip texture is not flipped automatically; check its V coordinate by hand.'); }
+			return null;
+		}
+
+		var parts = node.args.map(function (arg) { return render(arg); });
+
+		// The offset overloads take a constant int2 offset that cannot be mirrored through a function, so
+		// for a texture with a Vflip option the offset is folded into the coordinate instead:
+		//   v' = 1 - (v + off.y / height)  is the mirrored lookup at an offset of off texels.
+		var offsetIndex = (node.name === 'tex2D' && node.args.length === 3) || (node.name === 'tex2Dlod' && node.args.length === 3) ? 2
+			: (node.name === 'tex2Dgrad' && node.args.length === 5 ? 4 : -1);
+		if (offsetIndex >= 0)
+		{
+			var off = parts[offsetIndex];
+			var sampler = parts[0];
+			var moved = function (coord, lod)
+			{
+				var size = 'tex2Dsize(' + sampler + (lod ? ', int(' + lod + ')' : '') + ')';
+				var base = /^[\w.]+$/.test(coord) ? coord : '(' + coord + ')';
+				return base + ' + float2(' + off + ') / float2(' + size + ')';
+			};
+			if (node.name === 'tex2D')
+			{
+				parts = [parts[0], 'ST_flipV(' + moved(parts[1]) + ', ' + flag + ')'];
+				helpers.v2 = true;
+			}
+			else if (node.name === 'tex2Dgrad')
+			{
+				parts = [parts[0], 'ST_flipV(' + moved(parts[1]) + ', ' + flag + ')', 'ST_flipDir(' + parts[2] + ', ' + flag + ')', 'ST_flipDir(' + parts[3] + ', ' + flag + ')'];
+				helpers.v2 = true;
+				helpers.dir = true;
+			}
+			else
+			{
+				// tex2Dlod: the float4 coordinate is (u, v, 0, lod)
+				var coord4 = node.args[1];
+				var ctor = coord4.kind === 'call' && coord4.name === 'float4' && coord4.args.length === 3 && anParseType(coord4.args[0].type || '');
+				if (ctor && ctor.kind === 'vec' && ctor.rows === 2)
+				{
+					var lodText = render(coord4.args[2]);
+					parts = [parts[0], 'float4(ST_flipV(' + moved(render(coord4.args[0]), lodText) + ', ' + flag + '), ' + render(coord4.args[1]) + ', ' + lodText + ')'];
+				}
+				else
+				{
+					var c4 = /^[\w.]+$/.test(parts[1]) ? parts[1] : '(' + parts[1] + ')';
+					parts = [parts[0], 'float4(ST_flipV(' + moved(c4 + '.xy', c4 + '.w') + ', ' + flag + '), ' + c4 + '.zw)'];
+				}
+				helpers.v2 = true;
+			}
+			count++;
+			return node.name + '(' + parts.join(', ') + ')';
+		}
+
+		if (isFetch)
+		{
+			// the row counts from the other end of a texture that Shadertoy stores upside-down
+			var lod = parts.length > 2 ? ', ' + parts[2] : '';
+			parts[1] = 'ST_flipFetch(' + parts[1] + ', tex2Dsize(' + parts[0] + lod + '), ' + flag + ')';
+			helpers.fetch = true;
+		}
+		else if (node.name === 'tex2D' || node.name === 'tex2Dgrad')
+		{
+			parts[1] = 'ST_flipV(' + parts[1] + ', ' + flag + ')';
+			helpers.v2 = true;
+			if (node.name === 'tex2Dgrad' && parts.length >= 4)
+			{
+				parts[2] = 'ST_flipDir(' + parts[2] + ', ' + flag + ')';
+				parts[3] = 'ST_flipDir(' + parts[3] + ', ' + flag + ')';
+				helpers.dir = true;
+			}
+		}
+		else
+		{
+			// tex2Dlod / tex2Dbias take a float4 coordinate
+			var coord = node.args[1];
+			var firstType = coord.kind === 'call' && coord.name === 'float4' && coord.args.length === 3 && anParseType(coord.args[0].type || '');
+			if (firstType && firstType.kind === 'vec' && firstType.rows === 2)
+			{
+				parts[1] = 'float4(ST_flipV(' + render(coord.args[0]) + ', ' + flag + '), ' + render(coord.args[1]) + ', ' + render(coord.args[2]) + ')';
+				helpers.v2 = true;
+			}
+			else
+			{
+				parts[1] = 'ST_flipV4(' + parts[1] + ', ' + flag + ')';
+				helpers.v4 = true;
+			}
+		}
+		count++;
+		return node.name + '(' + parts.join(', ') + ')';
+	});
+
+	// Add the  bool <name>_vflip  parameter after every sampler2D parameter (definitions and prototypes)
+	var out = result.src;
+	if (Object.keys(samplerParams).length > 0)
+	{
+		var B = analyzeSource(out);
+		var inserts = [];
+		Object.keys(B.functions).forEach(function (name)
+		{
+			B.functions[name].forEach(function (fn)
+			{
+				fn.params.forEach(function (param)
+				{
+					if (param.type === 'sampler2D') { inserts.push({ at: B.tokens[B.sig[param.tok]].end, text: ', bool ' + param.name + '_vflip' }); }
+				});
+			});
+		});
+		inserts.sort(function (x, y) { return y.at - x.at; }).forEach(function (ins)
+		{
+			out = out.slice(0, ins.at) + ins.text + out.slice(ins.at);
+		});
+	}
+
+	return { src: out, count: count, helpers: helpers, warnings: warnings };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rename identifiers that ReShade FX reserves.
+//
+// GLSL lets a shader call a variable half, matrix, vector, texture, string, sample, register ...
+// but each of those is a keyword to the ReShade FX compiler. The list is the keyword table of
+// ReShade's own lexer (effect_lexer.cpp), minus the words GLSL itself uses as keywords or types
+// (if, const, struct, sampler2D ...) and the preprocessor directive names. A reserved word gets a
+// trailing underscore, everywhere: declarations, uses, struct fields and #define lines.
+//
+// texture / texture1D / texture2D / texture3D are also GLSL's sampling functions, so they are
+// renamed only where they are not being called.
+// ─────────────────────────────────────────────────────────────────────────────
+
+var RESERVED_IDENTIFIERS = (function ()
+{
+	var words = ('FALSE TRUE SamplerState Texture1D Texture1DArray Texture2D Texture2DArray Texture2DMS Texture2DMSArray Texture3D '
+		+ 'TextureCube TextureCubeArray asm asm_fragment auto cast catch char class column_major compile const_cast delete '
+		+ 'double dynamic_cast enum explicit extern external friend globallycoherent goto groupshared half inline linear long '
+		+ 'matrix mutable namespace new noinline nointerpolation noperspective operator packed packoffset pass point line precise '
+		+ 'private protected public register reinterpret_cast restrict row_major sample sampler sampler_state samplerRECT samplerRect '
+		+ 'shared short signed sizeof snorm static_cast storage storage1D storage2D storage3D string technique template texture '
+		+ 'texture1D texture2D texture3D textureCUBE textureRECT this try typedef union unorm unsigned using vector virtual volatile '
+		+ 'foreach interface samplerCUBE '
+		// reserved by HLSL itself rather than by ReShade's lexer; ReShade writes local names straight into the HLSL
+		// that the Direct3D compiler then reads, so these fail there even though ReShade's own parser accepts them
+		+ 'export triangle triangleadj lineadj cbuffer tbuffer NULL stateblock stateblock_state fxgroup technique10 technique11 '
+		+ 'pixelfragment vertexfragment compile_fragment CompileShader BlendState DepthStencilState DepthStencilView RasterizerState '
+		+ 'RenderTargetView SamplerComparisonState Buffer ByteAddressBuffer StructuredBuffer AppendStructuredBuffer ConsumeStructuredBuffer '
+		+ 'RWBuffer RWByteAddressBuffer RWStructuredBuffer RWTexture1D RWTexture1DArray RWTexture2D RWTexture2DArray RWTexture3D '
+		+ 'InputPatch OutputPatch LineStream PointStream TriangleStream ComputeShader DomainShader GeometryShader HullShader PixelShader VertexShader').split(' ');
+	var map = {};
+	words.forEach(function (w) { map[w] = w + '_'; });
+	// the HLSL half and min16 type families (half2, half3x3, min16float4 ...) and dword vectors
+	['half', 'dword', 'min16float', 'min16int', 'min16uint'].forEach(function (family)
+	{
+		map[family] = family + '_';
+		for (var n = 1; n <= 4; n++)
+		{
+			map[family + n] = family + n + '_';
+			for (var m = 1; m <= 4; m++) { map[family + n + 'x' + m] = family + n + 'x' + m + '_'; }
+		}
+	});
+	return map;
+}());
+
+var RESERVED_BUT_ALSO_GLSL_FUNCTIONS = { texture: true, texture1D: true, texture2D: true, texture3D: true };
+
+function renameReservedIdentifiers(src, messages)
+{
+	var renamed = {};
+	var tokens = tokenizeSource(src);
+	var out = tokens.map(function (token, i)
+	{
+		if (token.type === 'ident' && Object.prototype.hasOwnProperty.call(RESERVED_IDENTIFIERS, token.text))
+		{
+			if (RESERVED_BUT_ALSO_GLSL_FUNCTIONS[token.text])
+			{
+				var j = i + 1;
+				while (j < tokens.length && (tokens[j].type === 'ws' || tokens[j].type === 'comment' || tokens[j].type === 'placeholder')) { j++; }
+				if (j < tokens.length && tokens[j].text === '(') { return token.text; }
+			}
+			renamed[token.text] = true;
+			return RESERVED_IDENTIFIERS[token.text];
+		}
+		if (token.type === 'preproc' && !/^#\s*(include|pragma|error|warning)\b/.test(token.text))
+		{
+			return token.text.replace(/\b[A-Za-z_]\w*\b/g, function (word, offset)
+			{
+				if (!Object.prototype.hasOwnProperty.call(RESERVED_IDENTIFIERS, word)) { return word; }
+				if (RESERVED_BUT_ALSO_GLSL_FUNCTIONS[word] && /^\s*\(/.test(token.text.slice(offset + word.length))) { return word; }
+				renamed[word] = true;
+				return RESERVED_IDENTIFIERS[word];
+			});
+		}
+		return token.text;
+	}).join('');
+	var names = Object.keys(renamed);
+	if (messages && names.length > 0)
+	{
+		messages.push({ level: 'info', text: 'Renamed identifiers that are reserved words in ReShade FX: ' + names.map(function (n) { return n + ' → ' + n + '_'; }).join(', ') + '.' });
+	}
+	return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rewrite GLSL array constructors.
+//   float[3](1., 2., 3.)   →  {1., 2., 3.}        (the size may be left out: float[](...))
+//   vec2[2](vec2(..), ..)  →  {float2(..), ..}    (arguments may contain parentheses and nest)
+//   float[3] a = ...       →  float a[3] = ...    (GLSL allows the brackets after the type)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function rewriteArrayConstructors(src, structNames)
+{
+	var types = 'float[234]?(?:x[234])?|int[234]?|uint[234]?|bool[234]?' + structNames.map(function (n) { return '|' + n; }).join('');
+	var ctor = new RegExp('\\b(?:' + types + ')\\s*\\[\\s*\\d*\\s*\\]\\s*\\(', 'g');
+	var out = [];
+	var last = 0;
+	var m;
+	while ((m = ctor.exec(src)) !== null)
+	{
+		var open = m.index + m[0].length - 1;
+		var depth = 1;
+		var k = open + 1;
+		while (k < src.length && depth > 0)
+		{
+			if (src[k] === '(') { depth++; }
+			else if (src[k] === ')') { depth--; }
+			k++;
+		}
+		if (depth !== 0) { continue; }
+		out.push(src.slice(last, m.index));
+		out.push('{' + rewriteArrayConstructors(src.slice(open + 1, k - 1), structNames) + '}');
+		last = k;
+		ctor.lastIndex = k;
+	}
+	out.push(src.slice(last));
+	var declaration = new RegExp('\\b(' + types + ')\\s*\\[\\s*(\\d*)\\s*\\]\\s+([A-Za-z_]\\w*)(?=\\s*[=;,)])', 'g');
+	return out.join('').replace(declaration, '$1 $3[$2]');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rewrite diagonal matrix constructors:  mat2(s)  →  float2x2(s, 0.0, 0.0, s)
+//
+// In GLSL a matrix built from one scalar has that scalar on its diagonal and zeros elsewhere, so
+// mat3(1.0) is the identity. ReShade FX wants every element spelled out (X3014). The diagonal is
+// the same whichever way the matrix is stored. A matrix built from another matrix is left alone.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function rewriteDiagonalMatrices(src, messages)
+{
+	var result = rewriteExpressions(src, function (node, render)
+	{
+		if (node.kind !== 'call' || node.args.length !== 1) { return null; }
+		var target = anParseType(node.ctor || node.name);
+		if (!target || target.kind !== 'mat') { return null; }
+		var argType = node.args[0].type && anParseType(node.args[0].type);
+		if (!argType || argType.kind !== 'scalar') { return null; }
+
+		var text = render(node.args[0]);
+		var parts = [];
+		for (var row = 0; row < target.rows; row++)
+		{
+			for (var col = 0; col < target.cols; col++) { parts.push(row === col ? text : '0.0'); }
+		}
+		return node.name + '(' + parts.join(', ') + ')';
+	});
+
+	if (messages && result.parseFailures > 0)
+	{
+		messages.push({ level: 'warn', text: result.parseFailures + ' expression(s) could not be analysed for diagonal matrix constructors; check any matrix built from a single scalar by hand.' });
+	}
+	return result.src;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rewrite GLSL built-ins that ReShade FX lacks or names differently.
+//
+//   lessThan(a, b)  lessThanEqual  greaterThan  greaterThanEqual  equal  notEqual  →  a < b  and so on
+//   not(x)                                                                          →  !x
+//   roundEven → round    floatBitsToInt → asint    floatBitsToUint → asuint
+//   intBitsToFloat / uintBitsToFloat → asfloat
+//
+// ReShade FX has none of the comparison functions, but its operators work on vectors and give
+// a bool vector, which is what GLSL's functions return. A function the shader defines itself
+// under one of these names is left alone.
+// ─────────────────────────────────────────────────────────────────────────────
+
+var GLSL_COMPARISON_FUNCTIONS = { lessThan: '<', lessThanEqual: '<=', greaterThan: '>', greaterThanEqual: '>=', equal: '==', notEqual: '!=' };
+var GLSL_RENAMED_BUILTINS = { roundEven: 'round', floatBitsToInt: 'asint', floatBitsToUint: 'asuint', intBitsToFloat: 'asfloat', uintBitsToFloat: 'asfloat' };
+
+function rewriteGlslBuiltins(src)
+{
+	function definedByShader(name)
+	{
+		return new RegExp('\\b(?:void|bool[234]?|int[234]?|uint[234]?|float[234]?(?:x[234])?|\\w+)\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{').test(src);
+	}
+
+	// an operand is used as is when it is a plain name or already wrapped in one pair of parentheses
+	function operand(text)
+	{
+		if (/^[\w.]+$/.test(text)) { return text; }
+		if (text[0] === '(')
+		{
+			var depth = 0;
+			for (var i = 0; i < text.length; i++)
+			{
+				if (text[i] === '(') { depth++; }
+				else if (text[i] === ')') { depth--; if (depth === 0) { return i === text.length - 1 ? text : '(' + text + ')'; } }
+			}
+		}
+		return '(' + text + ')';
+	}
+
+	function rewrite(text)
+	{
+		var names = Object.keys(GLSL_COMPARISON_FUNCTIONS).concat(['not']).filter(function (n) { return !definedByShader(n); });
+		if (names.length === 0) { return text; }
+		var re = new RegExp('\\b(' + names.join('|') + ')\\s*\\(', 'g');
+		var out = [];
+		var last = 0;
+		var m;
+		while ((m = re.exec(text)) !== null)
+		{
+			var open = m.index + m[0].length - 1;
+			var parsed = splitCallArgs(text, open);
+			var args;
+			if (m[1] === 'not')
+			{
+				// one argument: splitCallArgs wants a comma, so find the closing parenthesis by hand
+				var depth = 1;
+				var k = open + 1;
+				while (k < text.length && depth > 0) { if (text[k] === '(') { depth++; } else if (text[k] === ')') { depth--; } k++; }
+				if (depth !== 0) { continue; }
+				var inner = rewrite(text.slice(open + 1, k - 1).trim());
+				out.push(text.slice(last, m.index));
+				out.push('(!' + operand(inner) + ')');
+				last = k;
+				re.lastIndex = k;
+				continue;
+			}
+			if (!parsed || parsed.args.length !== 1) { continue; }
+			args = [rewrite(parsed.samp), rewrite(parsed.args[0])];
+			out.push(text.slice(last, m.index));
+			out.push('(' + operand(args[0]) + ' ' + GLSL_COMPARISON_FUNCTIONS[m[1]] + ' ' + operand(args[1]) + ')');
+			last = parsed.end;
+			re.lastIndex = parsed.end;
+		}
+		out.push(text.slice(last));
+		return out.join('');
+	}
+
+	var renames = {};
+	Object.keys(GLSL_RENAMED_BUILTINS).forEach(function (name) { if (!definedByShader(name)) { renames[name] = GLSL_RENAMED_BUILTINS[name]; } });
+	return renameIdentifiers(rewrite(src), renames);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Make switch statements acceptable to ReShade FX.
+//
+// ReShade requires every non-empty case to end in break or return (X3533); GLSL does not, and
+// the last group, usually default:, is often left open. A final group without a terminator gets a
+// break; the result is the same. A group in the middle that falls through into the next one cannot
+// be expressed, so it is reported instead of changed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function rewriteSwitchBreaks(src, messages)
+{
+	var tokens = tokenizeSource(src);
+	var insertions = [];
+	var fallthrough = 0;
+
+	function sig(i) { return tokens[i]; }
+	function isSignificant(t) { return t.type !== 'ws' && t.type !== 'comment' && t.type !== 'placeholder' && t.type !== 'preproc'; }
+
+	for (var i = 0; i < tokens.length; i++)
+	{
+		if (!(tokens[i].type === 'ident' && tokens[i].text === 'switch')) { continue; }
+		// find the opening brace of the switch body
+		var j = i + 1;
+		var parenDepth = 0;
+		while (j < tokens.length)
+		{
+			if (tokens[j].text === '(') { parenDepth++; }
+			else if (tokens[j].text === ')') { parenDepth--; }
+			else if (tokens[j].text === '{' && parenDepth === 0) { break; }
+			j++;
+		}
+		if (j >= tokens.length) { continue; }
+		var bodyOpen = j;
+		var depth = 0;
+		var bodyClose = -1;
+		var labels = []; // index of each top-level case/default token
+		for (j = bodyOpen; j < tokens.length; j++)
+		{
+			var t = tokens[j];
+			if (t.text === '{') { depth++; }
+			else if (t.text === '}') { depth--; if (depth === 0) { bodyClose = j; break; } }
+			else if (depth === 1 && t.type === 'ident' && (t.text === 'case' || t.text === 'default')) { labels.push(j); }
+		}
+		if (bodyClose < 0) { continue; }
+
+		labels.forEach(function (labelIdx, g)
+		{
+			var isLast = g === labels.length - 1;
+			var groupEnd = isLast ? bodyClose : labels[g + 1];
+			// skip past the label's colon
+			var k = labelIdx;
+			while (k < groupEnd && tokens[k].text !== ':') { k++; }
+			k++;
+			// last significant tokens of the group body
+			var body = [];
+			for (var q = k; q < groupEnd; q++) { if (isSignificant(tokens[q])) { body.push(q); } }
+			if (body.length === 0) { return; } // empty case: falls into the next one, which is allowed
+			var lastTok = tokens[body[body.length - 1]];
+			var prevTok = body.length > 1 ? tokens[body[body.length - 2]] : null;
+			var closesBlock = lastTok.text === '}';
+			var endsWithBreak = lastTok.text === ';' && prevTok && (prevTok.text === 'break' || prevTok.text === 'continue' || prevTok.text === 'discard');
+			var returns = false;
+			for (var r = body.length - 1; r >= 0; r--)
+			{
+				// a statement starting with return that ends the group
+				if (tokens[body[r]].text === ';' && r < body.length - 1) { break; }
+				if (tokens[body[r]].text === 'return') { returns = true; }
+			}
+			if (endsWithBreak || returns || closesBlock) { return; }
+			if (isLast) { insertions.push({ at: tokens[body[body.length - 1]].end, text: ' break;' }); }
+			else { fallthrough++; }
+		});
+	}
+
+	if (messages && fallthrough > 0)
+	{
+		messages.push({ level: 'warn', text: fallthrough + ' switch case(s) fall through into the next case; ReShade FX does not allow that, add a break or repeat the code.' });
+	}
+	var out = src;
+	insertions.sort(function (a, b) { return b.at - a.at; }).forEach(function (ins) { out = out.slice(0, ins.at) + ins.text + out.slice(ins.at); });
+	return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers for GLSL built-ins that ReShade FX does not have.
+//
+//   inverse(mat2/3/4)        the matrix inverse, written out from its cofactors
+//   outerProduct(c, r)       c * transpose(r), in the element order a matrix constructor takes
+//   matrixCompMult(a, b)     component-wise product (a plain * on matrices would be a matrix product)
+//
+// Each helper is added to the pass source only when the shader calls it, and only for the matrix
+// sizes the shader uses. A shader that defines a function with that name itself is left alone.
+// Overloads for several sizes are fine in ReShade FX, and a helper repeated by several passes is
+// removed again by the function de-duplication.
+//
+// A matrix is stored transposed (see rewriteInlineMatrixMul), and the inverse of a transpose is the
+// transpose of the inverse, so the formula applies to the stored matrix unchanged.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// The determinant of the submatrix of m that keeps `rows` and `cols`, as an expression over m[r][c]
+function matrixMinorExpression(rows, cols)
+{
+	if (rows.length === 1) { return 'm[' + rows[0] + '][' + cols[0] + ']'; }
+	var terms = [];
+	for (var k = 0; k < cols.length; k++)
+	{
+		var rest = cols.filter(function (c, i) { return i !== k; });
+		var sub = matrixMinorExpression(rows.slice(1), rest);
+		terms.push((k % 2 === 0 ? '+ ' : '- ') + 'm[' + rows[0] + '][' + cols[k] + '] * ' + (rows.length > 2 ? '(' + sub + ')' : sub));
+	}
+	return terms.join(' ').replace(/^\+ /, '');
+}
+
+// Row-major element expressions of the inverse of an n x n matrix m, before dividing by the determinant:
+// element (i, j) is the cofactor of m[j][i].
+function inverseElementExpressions(n)
+{
+	var all = [];
+	for (var i = 0; i < n; i++) { all.push(i); }
+	var out = [];
+	for (var i2 = 0; i2 < n; i2++)
+	{
+		for (var j = 0; j < n; j++)
+		{
+			var rows = all.filter(function (r) { return r !== j; });
+			var cols = all.filter(function (c) { return c !== i2; });
+			var minor = n === 2 ? 'm[' + rows[0] + '][' + cols[0] + ']' : matrixMinorExpression(rows, cols);
+			out.push(((i2 + j) % 2 === 0 ? '' : '-') + '(' + minor + ')');
+		}
+	}
+	return out;
+}
+
+function glslHelperSource(name, n)
+{
+	var type = 'float' + n + 'x' + n;
+	var vec = 'float' + n;
+	var comps = ['x', 'y', 'z', 'w'].slice(0, n);
+	if (name === 'inverse')
+	{
+		return type + ' inverse(' + type + ' m)\n{\n\tfloat id = 1.0 / determinant(m);\n\treturn ' + type + '(\n\t\t'
+			+ inverseElementExpressions(n).map(function (e) { return e + ' * id'; }).join(',\n\t\t') + ');\n}\n\n';
+	}
+	if (name === 'outerProduct')
+	{
+		// GLSL builds the columns first: element k is c[k mod n] * r[k div n]
+		var args = [];
+		for (var k = 0; k < n * n; k++) { args.push('c.' + comps[k % n] + ' * r.' + comps[Math.floor(k / n)]); }
+		return type + ' outerProduct(' + vec + ' c, ' + vec + ' r)\n{\n\treturn ' + type + '(' + args.join(', ') + ');\n}\n\n';
+	}
+	// matrixCompMult: the product of corresponding rows is the product of corresponding elements
+	var rows = [];
+	for (var r = 0; r < n; r++) { rows.push('a[' + r + '] * b[' + r + ']'); }
+	return type + ' matrixCompMult(' + type + ' a, ' + type + ' b)\n{\n\treturn ' + type + '(' + rows.join(', ') + ');\n}\n\n';
+}
+
+function injectGlslHelpers(src)
+{
+	var helpers = '';
+	['inverse', 'outerProduct', 'matrixCompMult'].forEach(function (name)
+	{
+		if (!new RegExp('\\b' + name + '\\s*\\(').test(src)) { return; }
+		if (new RegExp('\\b(?:float\\d?(?:x\\d)?|void)\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{').test(src)) { return; }
+		[2, 3, 4].forEach(function (n)
+		{
+			if (new RegExp('\\bfloat' + n + 'x' + n + '\\b').test(src) || (name === 'outerProduct' && new RegExp('\\bfloat' + n + '\\b').test(src))) { helpers += glslHelperSource(name, n); }
+		});
+	});
+	return helpers + src;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rewrite the GLSL texture lookups that take an offset or a projective coordinate.
+//
+//   textureOffset(s, uv, off)              →  tex2D(s, uv, off)
+//   textureLodOffset(s, uv, lod, off)      →  tex2Dlod(s, float4(uv, 0.0, lod), off)
+//   textureGradOffset(s, uv, dx, dy, off)  →  tex2Dgrad(s, uv, dx, dy, off)
+//   texelFetchOffset(s, p, lod, off)       →  tex2Dfetch(s, p + off, lod)
+//   textureProj(s, p)                      →  tex2D(s, p.xy / p.z)    or  p.xy / p.w  for a float4
+//
+// ReShade FX has offset overloads of tex2D, tex2Dlod and tex2Dgrad (the offset is an int2 in texels
+// and must be a constant, as in GLSL), so those calls map one to one. tex2Dfetch has no offset form,
+// so the offset is added to the texel position. There is no projective lookup, so textureProj divides
+// by hand. A Vflip texture needs its offset mirrored too; that is handled with the other V flips.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function rewriteTextureVariants(src, messages)
+{
+	if (!/\b(?:textureOffset|textureLodOffset|textureGradOffset|texelFetchOffset|textureProj)\s*\(/.test(src)) { return src; }
+
+	function operand(text)
+	{
+		return /^[\w.]+$/.test(text) ? text : '(' + text + ')';
+	}
+
+	var result = rewriteExpressions(src, function (node, render)
+	{
+		if (node.kind !== 'call') { return null; }
+		var a = node.args;
+		if (node.name === 'textureOffset' && a.length === 3)
+		{
+			return 'tex2D(' + render(a[0]) + ', ' + render(a[1]) + ', ' + render(a[2]) + ')';
+		}
+		if (node.name === 'textureLodOffset' && a.length === 4)
+		{
+			return 'tex2Dlod(' + render(a[0]) + ', float4(' + render(a[1]) + ', 0.0, ' + render(a[2]) + '), ' + render(a[3]) + ')';
+		}
+		if (node.name === 'textureGradOffset' && a.length === 5)
+		{
+			return 'tex2Dgrad(' + render(a[0]) + ', ' + render(a[1]) + ', ' + render(a[2]) + ', ' + render(a[3]) + ', ' + render(a[4]) + ')';
+		}
+		if (node.name === 'texelFetchOffset' && a.length === 4)
+		{
+			var lod = render(a[2]);
+			return 'tex2Dfetch(' + render(a[0]) + ', ' + operand(render(a[1])) + ' + ' + operand(render(a[3])) + (lod === '0' ? '' : ', ' + lod) + ')';
+		}
+		if (node.name === 'textureProj' && a.length === 2)
+		{
+			var type = a[1].type && anParseType(a[1].type);
+			if (!type || type.kind !== 'vec' || type.rows < 3) { return null; }
+			var p = operand(render(a[1]));
+			return 'tex2D(' + render(a[0]) + ', ' + p + '.xy / ' + p + '.' + (type.rows === 3 ? 'z' : 'w') + ')';
+		}
+		return null;
+	});
+	if (messages && result.parseFailures > 0)
+	{
+		messages.push({ level: 'warn', text: result.parseFailures + ' expression(s) could not be analysed for the texture offset / projection lookups; check those calls by hand.' });
+	}
+	return result.src;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Define every function before it is used.
+//
+// GLSL lets a shader declare a function near the top and define it further down, so the main code
+// can come first. ReShade FX accepts no forward declarations at all: a declaration without its
+// body is an error even when the body follows directly (X3510), and a call to a function that is
+// defined later is an undeclared identifier. So:
+//   - every function declaration that has a definition is removed, and
+//   - a function that calls a function defined after it is moved to follow that function.
+// Nothing else moves: globals, structs and macros stay where they are. A function moved later only
+// gains access to more of them. The call graph of a GLSL program has no cycles, so this ends.
+// A function inside an #if block is not moved (that would pull it out of its condition); it is
+// reported instead.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function reorderFunctions(src, messages)
+{
+	// quick exit: no declaration without a body anywhere
+	if (!/^[A-Za-z_][\w \t]*\b[A-Za-z_]\w*[ \t]*\([^;{}]*\)[ \t]*;/m.test(src)) { return src; }
+
+	var A = analyzeSource(src);
+	var definitions = [];
+	var prototypes = [];
+	Object.keys(A.functions).forEach(function (name)
+	{
+		A.functions[name].forEach(function (fn)
+		{
+			var first = A.tokens[A.sig[fn.from]];
+			if (fn.bodyFrom !== undefined) { definitions.push({ name: name, fn: fn, start: first.start, end: A.tokens[A.sig[fn.bodyTo]].end, callees: [] }); }
+			else { prototypes.push({ name: name, fn: fn, start: first.start, end: A.tokens[A.sig[fn.protoTo]].end }); }
+		});
+	});
+	if (prototypes.length === 0 || definitions.length === 0) { return src; }
+
+	// outermost #if ... #endif blocks, as character ranges
+	var blocks = [];
+	var depth = 0;
+	var blockStart = 0;
+	A.tokens.forEach(function (t)
+	{
+		if (t.type !== 'preproc') { return; }
+		if (/^#\s*(if|ifdef|ifndef)\b/.test(t.text)) { if (depth === 0) { blockStart = t.start; } depth++; }
+		else if (/^#\s*endif\b/.test(t.text)) { depth--; if (depth === 0) { blocks.push({ start: blockStart, end: t.end }); } }
+	});
+	function inConditional(item) { return blocks.some(function (b) { return item.start < b.end && item.end > b.start; }); }
+
+	// which functions each definition calls
+	var defined = {};
+	definitions.forEach(function (d) { defined[d.name] = true; });
+	definitions.forEach(function (d)
+	{
+		var seen = {};
+		for (var i = d.fn.bodyFrom; i <= d.fn.bodyTo; i++)
+		{
+			var tok = A.tokens[A.sig[i]];
+			if (tok.type === 'ident' && defined[tok.text] && tok.text !== d.name && A.tokens[A.sig[i + 1]] && A.tokens[A.sig[i + 1]].text === '(' && !(A.tokens[A.sig[i - 1]] && A.tokens[A.sig[i - 1]].text === '.')) { seen[tok.text] = true; }
+		}
+		d.callees = Object.keys(seen);
+	});
+
+	// split the source into  gap, definition, gap, definition ... gap  with declarations cut out of the gaps
+	var removed = prototypes.filter(function (p) { return defined[p.name]; });
+	var kept = prototypes.filter(function (p) { return !defined[p.name]; });
+	var cuts = removed.map(function (p) { return { start: p.start, end: p.end }; });
+	definitions.sort(function (a, b) { return a.start - b.start; });
+	var gaps = [];
+	var cursor = 0;
+	function gapText(from, to)
+	{
+		var text = '';
+		var at = from;
+		cuts.filter(function (c) { return c.start >= from && c.end <= to; }).sort(function (a, b) { return a.start - b.start; }).forEach(function (c)
+		{
+			text += src.slice(at, c.start);
+			at = c.end;
+			if (src[at] === '\r') { at++; }
+			if (src[at] === '\n') { at++; } // the declaration's own line goes with it
+		});
+		return text + src.slice(at, to);
+	}
+	definitions.forEach(function (d) { gaps.push(gapText(cursor, d.start)); cursor = d.end; d.text = src.slice(d.start, d.end); });
+	gaps.push(gapText(cursor, src.length));
+	var slots = definitions.map(function (d) { return [d]; });
+	definitions.forEach(function (d, i) { d.slot = i; d.movable = !inConditional(d); });
+
+	function position(d) { return d.slot * 100000 + slots[d.slot].indexOf(d); }
+	var moved = {};
+	var blocked = {};
+	for (var round = 0; round < 5000; round++)
+	{
+		var changed = false;
+		for (var i = 0; i < definitions.length && !changed; i++)
+		{
+			var f = definitions[i];
+			var target = null;
+			f.callees.forEach(function (name)
+			{
+				definitions.forEach(function (x) { if (x.name === name && position(x) > position(f) && (!target || position(x) > position(target))) { target = x; } });
+			});
+			if (!target) { continue; }
+			if (!f.movable) { blocked[f.name] = true; continue; }
+			slots[f.slot].splice(slots[f.slot].indexOf(f), 1);
+			f.slot = target.slot;
+			slots[target.slot].splice(slots[target.slot].indexOf(target) + 1, 0, f);
+			moved[f.name] = true;
+			changed = true;
+		}
+		if (!changed) { break; }
+	}
+
+	var out = '';
+	for (var k = 0; k < slots.length; k++)
+	{
+		out += gaps[k];
+		out += slots[k].map(function (d) { return d.text; }).join('\n\n');
+	}
+	out += gaps[gaps.length - 1];
+
+	if (messages)
+	{
+		var movedNames = Object.keys(moved);
+		messages.push({ level: 'info', text: 'ReShade FX has no forward declarations: removed ' + removed.length + ' function declaration(s)' + (movedNames.length ? ' and moved ' + movedNames.slice(0, 4).join(', ') + (movedNames.length > 4 ? ' (and ' + (movedNames.length - 4) + ' more)' : '') + ' after the function(s) they call' : '') + '.' });
+		var blockedNames = Object.keys(blocked);
+		if (blockedNames.length) { messages.push({ level: 'warn', text: blockedNames.join(', ') + ' calls a function defined later but sits inside an #if block, so it was not moved; define the called function first.' }); }
+		if (kept.length) { messages.push({ level: 'warn', text: 'Function(s) declared but never defined: ' + kept.map(function (p) { return p.name; }).join(', ') + '.' }); }
+	}
+	return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Global declarations with several variables.
+//
+//   const float pi = acos(-1.), tau = 2.*pi;   →   const float pi = acos(-1.);
+//                                                   const float tau = 2.*pi;
+//
+// The steps that make globals static, evaluate constant initialisers and move the ones ReShade FX
+// cannot take (hoistGlobalInits) each look for one variable per declaration. Only declarations at file
+// scope are split; inside a function, a struct or a parameter list nothing is touched. A comma inside
+// parentheses, brackets or braces separates nothing. A comment at the end of a variable stays with it,
+// whether it stands before the comma or after it on the same line, and the semicolon goes before it,
+// so a line comment cannot swallow the semicolon.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function splitGlobalDeclarators(src, messages)
+{
+	if (src.indexOf(',') < 0) { return src; }
+	var tokens = tokenizeSource(src);
+	var QUALIFIERS = { 'const': true, 'static': true, 'uniform': true, 'volatile': true, 'precise': true, 'extern': true };
+	var pieces = [];
+	var split = 0;
+	var i = 0;
+	var n = tokens.length;
+
+	function skippable(t) { return t.type === 'ws' || t.type === 'comment' || t.type === 'placeholder'; }
+
+	while (i < n)
+	{
+		if (skippable(tokens[i]) || tokens[i].type === 'preproc') { i++; continue; }
+
+		// one statement at file scope: from i to its end
+		var start = i;
+		var depth = 0;
+		var sawFunctionBody = false;
+		var endTok = -1;
+		var spoiled = false;
+		var commas = [];
+		var paren = 0;
+		for (var j = i; j < n; j++)
+		{
+			var tk = tokens[j];
+			if (tk.type === 'preproc') { spoiled = true; continue; }
+			if (tk.type !== 'punct') { continue; }
+			var c = tk.text;
+			if (c === '(' || c === '[') { paren++; }
+			else if (c === ')' || c === ']') { paren--; }
+			else if (c === '{')
+			{
+				if (paren === 0 && depth === 0 && tokens[start].text !== 'struct' && !sawParenBeforeBrace(tokens, start, j)) { /* an initialiser list */ }
+				else if (paren === 0 && depth === 0 && sawParenBeforeBrace(tokens, start, j)) { sawFunctionBody = true; }
+				depth++;
+			}
+			else if (c === '}')
+			{
+				depth--;
+				if (depth === 0 && sawFunctionBody) { endTok = j; break; }
+			}
+			else if (c === ',' && depth === 0 && paren === 0) { commas.push(j); }
+			else if (c === ';' && depth === 0 && paren === 0) { endTok = j; break; }
+		}
+		if (endTok < 0) { break; }
+
+		if (!sawFunctionBody && !spoiled && commas.length > 0 && tokens[start].text !== 'struct' && tokens[start].text !== 'typedef')
+		{
+			// qualifiers, then a type, then the first variable's name
+			var k = start;
+			var header = [];
+			while (k < endTok && (skippable(tokens[k]) || QUALIFIERS[tokens[k].text])) { if (!skippable(tokens[k])) { header.push(tokens[k].text); } k++; }
+			var typeTok = tokens[k];
+			var nameIdx = k + 1;
+			while (nameIdx < endTok && skippable(tokens[nameIdx])) { nameIdx++; }
+			var nameTok = tokens[nameIdx];
+			var afterName = nameIdx + 1;
+			while (afterName < endTok && skippable(tokens[afterName])) { afterName++; }
+			var isFunction = tokens[afterName] && tokens[afterName].text === '(';
+			if (typeTok && typeTok.type === 'ident' && nameTok && nameTok.type === 'ident' && !isFunction)
+			{
+				header.push(typeTok.text);
+				var headerText = header.join(' ');
+				var indent = /[ \t]*$/.exec(src.slice(0, tokens[start].start))[0];
+				var bounds = [nameIdx].concat(commas.map(function (cIdx) { return cIdx + 1; }));
+				var parts = [];
+				for (var b = 0; b < bounds.length; b++)
+				{
+					var from = tokens[bounds[b]].start;
+					var to = b + 1 < bounds.length ? tokens[commas[b]].start : tokens[endTok].start;
+					var raw = src.slice(from, to);
+					if (b > 0)
+					{
+						// a comment on the same line after the comma belongs to the variable before it
+						var lead = /^(?:[ \t]*«[^»]*»)*/.exec(raw)[0];
+						parts[b - 1].tail += lead;
+						raw = raw.slice(lead.length);
+					}
+					// comments on lines of their own before a variable stand before its declaration
+					var before = '';
+					var own = /^(?:\s*«[^»]*»)+/.exec(raw);
+					if (own)
+					{
+						before = own[0].match(/«[^»]*»/g).join('\n' + indent) + '\n' + indent;
+						raw = raw.slice(own[0].length);
+					}
+					var text = raw.replace(/^\s+/, '');
+					// trailing comment placeholders go after the semicolon
+					var m = /((?:\s*«[^»]*»)*)\s*$/.exec(text);
+					var tail = m[1] || '';
+					text = text.slice(0, text.length - m[0].length).replace(/\s+$/, '');
+					parts.push({ core: before + headerText + ' ' + text, tail: tail });
+				}
+				parts = parts.map(function (pt) { return pt.core + ';' + pt.tail; });
+				pieces.push({ from: tokens[start].start, to: tokens[endTok].end, text: parts.join('\n' + indent) });
+				split++;
+			}
+		}
+		i = endTok + 1;
+	}
+	if (pieces.length === 0) { return src; }
+	var out = '';
+	var at = 0;
+	pieces.forEach(function (pc) { out += src.slice(at, pc.from) + pc.text; at = pc.to; });
+	out += src.slice(at);
+	if (messages) { messages.push({ level: 'info', text: split + ' global declaration(s) with several variables split into one declaration per variable.' }); }
+	return out;
+}
+
+// Is there a closing parenthesis between the start of a statement and a brace, as in  float f(float x) {  ?
+function sawParenBeforeBrace(tokens, start, braceIdx)
+{
+	for (var q = start; q < braceIdx; q++) { if (tokens[q].type === 'punct' && tokens[q].text === ')') { return true; } }
+	return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// array.length()
+//
+//   a.length()  →  3        for  float a[3]  and for  float a[] = {1.0, 2.0, 3.0}
+//
+// ReShade FX has no methods. The size is read from where the array is declared: the number in the
+// brackets, or else the number of elements of the braced initialiser. A name declared more than once
+// with different sizes is ambiguous, and a name that is not an array (a vector, say) has no size to
+// read; in both cases the call is left as it is and reported.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function rewriteArrayLength(src, messages)
+{
+	if (!/\.\s*length\s*\(\s*\)/.test(src)) { return src; }
+	var cache = {};
+
+	// the number of top-level elements in the text between a pair of braces
+	function countElements(text)
+	{
+		var depth = 0;
+		var count = 0;
+		var any = false;
+		for (var i = 0; i < text.length; i++)
+		{
+			var c = text[i];
+			if (c === '(' || c === '[' || c === '{') { depth++; any = true; }
+			else if (c === ')' || c === ']' || c === '}') { depth--; }
+			else if (c === ',' && depth === 0) { count++; }
+			else if (!/\s/.test(c)) { any = true; }
+		}
+		if (!any) { return 0; }
+		return /,\s*$/.test(text) ? count : count + 1;
+	}
+
+	// every size the name is declared with: a number, or null when it cannot be told
+	function sizesOf(name)
+	{
+		if (cache[name]) { return cache[name]; }
+		var sizes = [];
+		var re = new RegExp('(?:^|[;{}(,\\s])(?!(?:return|else|case|do|goto|in|out|inout)\\b)[A-Za-z_]\\w*\\s+' + name + '\\s*\\[\\s*(\\d*)\\s*\\]\\s*(=\\s*\\{)?', 'g');
+		var m;
+		while ((m = re.exec(src)) !== null)
+		{
+			if (m[1]) { sizes.push(parseInt(m[1], 10)); continue; }
+			if (m[2])
+			{
+				// an unsized array: count what is between the braces
+				var from = m.index + m[0].length;
+				var depth = 1;
+				var to = from;
+				while (to < src.length && depth > 0) { if (src[to] === '{') { depth++; } else if (src[to] === '}') { depth--; } to++; }
+				sizes.push(countElements(src.slice(from, to - 1)));
+				continue;
+			}
+			sizes.push(null);
+		}
+		cache[name] = sizes;
+		return sizes;
+	}
+
+	var replaced = 0;
+	var unresolved = {};
+	var out = src.replace(/(^|[^.\w])([A-Za-z_]\w*)\s*\.\s*length\s*\(\s*\)/g, function (match, before, name)
+	{
+		var sizes = sizesOf(name);
+		var distinct = sizes.filter(function (v, i) { return sizes.indexOf(v) === i; });
+		if (distinct.length === 1 && distinct[0] !== null) { replaced++; return before + distinct[0]; }
+		unresolved[name] = true;
+		return match;
+	});
+
+	if (messages && replaced > 0)
+	{
+		messages.push({ level: 'info', text: replaced + ' array length() call(s) replaced with the size of the array.' });
+	}
+	var names = Object.keys(unresolved);
+	if (messages && names.length > 0)
+	{
+		messages.push({ level: 'warn', text: 'length() of ' + names.join(', ') + ' could not be replaced: ReShade FX has no methods, and the size of the array is not clear from its declaration. Write the size instead.' });
+	}
+	return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lookups in a channel that is not connected to anything.
+//
+//   tex2Dlod(iChannel3, float4(uv, 0.0, 0.0)).x   →   float4(0.0, 0.0, 0.0, 0.0).x
+//
+// A channel with no texture (the keyboard, a microphone, one left on None) has no sampler to read, and
+// a shader that still reads it would not compile. It reads zero instead: black, and for the keyboard no
+// key pressed, which is where a shader normally starts. The lookups are replaced rather than given an
+// empty texture, because a texture nobody writes to is not guaranteed to be zero in every graphics API.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function rewriteEmptyChannels(src, emptySamplers, messages)
+{
+	if (!emptySamplers || emptySamplers.length === 0) { return src; }
+	if (!/\btex2D(?:lod|fetch|grad|bias)?\s*\(/.test(src)) { return src; }
+	var count = 0;
+	var LOOKUPS = { 'tex2D': true, 'tex2Dlod': true, 'tex2Dfetch': true, 'tex2Dgrad': true, 'tex2Dbias': true };
+	var result = rewriteExpressions(src, function (node, render)
+	{
+		if (node.kind !== 'call' || !LOOKUPS[node.name] || node.args.length === 0) { return null; }
+		if (node.args[0].kind !== 'ident' || emptySamplers.indexOf(node.args[0].name) < 0) { return null; }
+		count++;
+		return 'float4(0.0, 0.0, 0.0, 0.0)';
+	});
+	if (messages && count > 0)
+	{
+		messages.push({ level: 'info', text: count + ' lookup(s) in a channel that is not connected to anything were replaced with zero.' });
+	}
+	return result.src;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Code after a return in the same block.
+//
+//   { return a; return b; }   →   { return a; }
+//
+// ReShade FX rejects every statement that cannot be reached (error: unreachable code). A return that
+// stands on its own in a block, after  {  ;  or  }  , ends the block: what follows, up to the closing
+// brace, is dropped. A return that is the body of an if, else or loop (after  )  or  else ) is not
+// unconditional and is left alone. A return right after a case or default label is unconditional too.
+// In a switch the next case or default label is reachable and ends what is dropped. Comments stay, each on a line of its own, so none can swallow a brace. Nothing
+// is dropped if a preprocessor line lies in the way.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function removeCodeAfterReturn(src)
+{
+	if (src.indexOf('return') < 0) { return src; }
+	var tokens = tokenizeSource(src);
+	var n = tokens.length;
+	var cuts = [];
+	var prev = '';
+	var i = 0;
+
+	function skippable(t) { return t.type === 'ws' || t.type === 'comment' || t.type === 'placeholder'; }
+
+	while (i < n)
+	{
+		var t = tokens[i];
+		if (skippable(t)) { i++; continue; }
+		if (t.type === 'ident' && t.text === 'return' && (prev === '{' || prev === ';' || prev === '}' || prev === ':'))
+		{
+			// the end of the return statement: the first ; outside any parentheses
+			var depth = 0;
+			var j = i + 1;
+			while (j < n)
+			{
+				var u = tokens[j];
+				if (u.type === 'punct')
+				{
+					if (u.text === '(' || u.text === '[' || u.text === '{') { depth++; }
+					else if (u.text === ')' || u.text === ']' || u.text === '}') { depth--; }
+					else if (u.text === ';' && depth === 0) { break; }
+				}
+				j++;
+			}
+			if (j >= n) { break; }
+
+			// what follows, up to the end of the block or the next label
+			var k = j + 1;
+			var level = 0;
+			var preproc = false;
+			var placeholders = [];
+			var anything = false;
+			while (k < n)
+			{
+				var v = tokens[k];
+				if (v.type === 'preproc') { preproc = true; }
+				if (v.type === 'punct')
+				{
+					if (v.text === '(' || v.text === '[' || v.text === '{') { level++; }
+					else if (v.text === ')' || v.text === ']' || v.text === '}')
+					{
+						if (level === 0) { break; }
+						level--;
+					}
+				}
+				if (level === 0 && v.type === 'ident' && (v.text === 'case' || v.text === 'default')) { break; }
+				if (v.type === 'placeholder') { placeholders.push(v.text); }
+				else if (!skippable(v)) { anything = true; }
+				k++;
+			}
+			if (anything && !preproc)
+			{
+				var from = tokens[j].end;
+				var to = k < n ? tokens[k].start : src.length;
+				var region = src.slice(from, to);
+				var trailing = /\s*$/.exec(region)[0];
+				var indent = /[ \t]*$/.exec(trailing)[0];
+				// a comment is always followed by a line break, so that it cannot swallow what comes next
+				var closing = trailing.indexOf('\n') >= 0 ? trailing : '\n' + trailing;
+				var replacement = placeholders.length > 0 ? '\n' + indent + placeholders.join('\n' + indent) + closing : trailing;
+				cuts.push({ from: from, to: to, text: replacement });
+			}
+			prev = ';';
+			i = k;
+			continue;
+		}
+		prev = t.text;
+		i++;
+	}
+	if (cuts.length === 0) { return src; }
+	var out = '';
+	var at = 0;
+	cuts.forEach(function (c) { out += src.slice(at, c.from) + c.text; at = c.to; });
+	return out + src.slice(at);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A constructor with one literal number inside a #define.
+//
+//   #define camTarget vec3(0)   →   #define camTarget float3(0, 0, 0)
+//
+// float3(0) is not valid in HLSL (X3014), and the analyzer does not read the body of a macro as code,
+// so the expansion of a scalar constructor never reaches it. With a literal the type is known without
+// any analysis: it is a scalar. A constructor with a name or an expression in a macro cannot be told
+// apart from one with a vector, so it is left alone.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function expandLiteralConstructorsInMacros(src, messages)
+{
+	if (src.indexOf('#') < 0) { return src; }
+	var tokens = tokenizeSource(src);
+	var literal = '[-+]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?[uUfF]?';
+	var re = new RegExp('\\b(float|int|uint|bool)([234])\\s*\\(\\s*(' + literal + ')\\s*\\)', 'g');
+	var count = 0;
+	var out = '';
+	tokens.forEach(function (t)
+	{
+		if (t.type === 'preproc' && /^#\s*define\b/.test(t.text))
+		{
+			out += t.text.replace(re, function (match, base, size, value)
+			{
+				count++;
+				var parts = [];
+				for (var i = 0; i < parseInt(size, 10); i++) { parts.push(value); }
+				return base + size + '(' + parts.join(', ') + ')';
+			});
+		}
+		else { out += t.text; }
+	});
+	if (messages && count > 0)
+	{
+		messages.push({ level: 'info', text: count + ' scalar constructor(s) inside #define lines were written out, as HLSL needs.' });
+	}
+	return out;
+}
+
+// ── Indentation normalizer ────────────────────────────────────────────────────
+// Detect the indent unit used in the source (smallest non-zero space indent),
+// then replace every leading indent level with a tab.
+
+function normalizeIndentation(src)
+{
+	var lines = src.split('\n');
+
+	// Detect indent unit — find smallest run of leading spaces > 0
+	var unit  = 0;
+	lines.forEach(function(line)
+	{
+	    var m = line.match(/^( +)/);
+	    if (m)
+	    {
+	        var n = m[1].length;
+	        if (unit === 0 || n < unit) { unit = n; }
+	    }
+	});
+
+	if (unit === 0) { return src; } // no space indentation found
+
+	return lines.map(function(line)
+	{
+	    var m = line.match(/^( *)(.*)/);
+	    if (!m || m[1].length === 0) { return line; }
+
+	    var spaces = m[1].length;
+	    var level  = Math.floor(spaces / unit);
+	    var rem    = spaces % unit; // leftover spaces (alignment, not indentation)
+	    return '\t'.repeat(level) + ' '.repeat(rem) + m[2];
+	}).join('\n');
 }

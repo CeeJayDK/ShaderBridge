@@ -136,7 +136,7 @@ function resolveJsonInput(inp, outputIdMap, thisPassId)
 
 	if (type === 'musicstream' || type === 'soundcloud' || type === 'music')
 	{
-		return { ch: makeChannel('none'), warn: 'Audio input (musicstream) on CH' + inp.channel + ' is not supported — channel left unset.', selfRef: false };
+		return { ch: makeChannel('none'), warn: 'Audio input (musicstream) on CH' + inp.channel + ' is not supported — channel left unset; it reads as zero (silence).', selfRef: false };
 	}
 
 	if (type === 'webcam')
@@ -151,7 +151,7 @@ function resolveJsonInput(inp, outputIdMap, thisPassId)
 
 	if (type === 'keyboard' || type === 'mic')
 	{
-		return { ch: makeChannel('none'), warn: 'Input type "' + type + '" on CH' + inp.channel + ' is not supported — channel left unset.', selfRef: false };
+		return { ch: makeChannel('none'), warn: 'Input type "' + type + '" on CH' + inp.channel + ' is not supported — channel left unset; it reads as zero' + (type === 'keyboard' ? ' (no key is pressed).' : ' (silence).'), selfRef: false };
 	}
 
 	// Unknown type
