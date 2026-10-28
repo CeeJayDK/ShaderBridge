@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.47';
+var PORTER_VERSION = '3.0.48';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -471,7 +471,7 @@ function stepCompatibilityMacros(ctx)
 		definitions[m[2]] = (definitions[m[2]] || 0) + 1;
 		var body = m[5].replace(/«[⁰¹²³⁴⁵⁶⁷⁸⁹0-9]+»/g, ' ').trim();
 		var params = m[3] ? m[4].split(',').map(function (p) { return p.trim(); }).filter(Boolean) : null;
-		if (m[1] === 'define' && conditional === 0 && !/[#{};]/.test(body) && (!params || params.every(function (p) { return /^[A-Za-z_]\w*$/.test(p); })))
+		if (m[1] === 'define' && conditional === 0 && !/#/.test(body) && (!params || params.every(function (p) { return /^[A-Za-z_]\w*$/.test(p); })))
 		{
 			macros[m[2]] = { body: body, params: params };
 		}
@@ -484,7 +484,9 @@ function stepCompatibilityMacros(ctx)
 		var bodyTokens = tokenizeSource(macro.body).filter(function (t) { return t.type !== 'ws'; });
 		return bodyTokens.some(function (t, i)
 		{
-			return t.type === 'ident' && ((/^(?:(?:float|int|uint|bool)[234]|texture\w*|texelFetch\w*|tex[23]D\w*|texCUBE\w*)$/.test(t.text) && bodyTokens[i + 1] && bodyTokens[i + 1].text === '(') || needsExpansion(t.text, seen.concat(name)));
+			var constructorOrLookup = /^(?:(?:float|int|uint|bool)[234]|texture\w*|texelFetch\w*|tex[23]D\w*|texCUBE\w*)$/.test(t.text);
+			var statementMatrix = /[{};]/.test(macro.body) && /^float[234]x[234]$/.test(t.text);
+			return t.type === 'ident' && (((constructorOrLookup || statementMatrix) && bodyTokens[i + 1] && bodyTokens[i + 1].text === '(') || needsExpansion(t.text, seen.concat(name)));
 		});
 	}
 	var expansionCount = 0;

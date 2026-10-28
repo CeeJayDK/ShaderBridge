@@ -1,6 +1,7 @@
 // Small GLSL idioms common in Shadertoy shaders. Each entry: [id, helpers (global code), body of mainImage].
 // Every one is valid GLSL ES 3.00 as Shadertoy accepts it; the porter must turn it into a compiling effect.
 module.exports = [
+	['macro_statement_matrix', '#define ROTATE(v,a) { float c=cos(a), s=sin(a); v *= mat2(c,-s,s,c); }\n', 'vec2 q = fragCoord; ROTATE(q, 0.5); fragColor = vec4(q, 0., 1.);'],
 	['uint_float_constant', '#define LIMIT float(0xffffffffU)\n', 'fragColor = vec4(float(0x80000000U) / LIMIT);'],
 	['macro_vector_cast', '#define PIXELS ivec2(iResolution)\n', 'fragColor = vec4(vec2(PIXELS), 0., 1.);'],
 	['macro_empty_lookup', '#define SAMPLE(p) texelFetch(iChannel0, ivec2(p), 0)\n#define PRESSED(k) (SAMPLE(vec2(k,0)).x > 0.5)\n', 'fragColor = vec4(float(PRESSED(2)));', { channel0: 'none' }],

@@ -141,6 +141,8 @@ r = port('', 'int k = int(fragCoord.x) % 3; vec3 c = vec3(0.); switch (k) { case
 check('through the pipeline', /default: c = float3\(0\., 0\., 1\.\); break;/.test(r.out), r.out);
 
 // ── function-like macros are typed from their bodies (3.0.19)
+const statementMacro = porter.transformGLSL('#define ROTATE(v,a) { float c=cos(a), s=sin(a); v *= mat2(c,-s,s,c); }\nvoid mainImage(out vec4 c, vec2 p) { ROTATE(p, 0.5); c = vec4(p, 0., 1.); }', [], 'Image').src;
+check('statement macros expose matrix assignments to the typed rewriter', /p = mul\(float2x2\(c,-s,s,c\), p\)/.test(statementMacro), statementMacro);
 const highUint = porter.transformGLSL('#define LIMIT float(0xffffffffU)\nvoid mainImage(out vec4 c, vec2 p) { c = vec4(float(0x80000000U) / LIMIT); }', [], 'Image').src;
 check('high unsigned constants become floating-point literals in casts and macros', /float\(4294967295.0\)/.test(highUint) && /float\(2147483648.0\)/.test(highUint), highUint);
 const untouchedUint = {src:'uint value=0xffffffffU; float signedValue=float(-1); string text="float(0xffffffffU)";'};
