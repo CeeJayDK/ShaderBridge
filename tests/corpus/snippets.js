@@ -1,6 +1,8 @@
 // Small GLSL idioms common in Shadertoy shaders. Each entry: [id, helpers (global code), body of mainImage].
 // Every one is valid GLSL ES 3.00 as Shadertoy accepts it; the porter must turn it into a compiling effect.
 module.exports = [
+	['locals_without_indent', 'vec2 shade(vec2 q)\n{\nvec2 local = sin(q), other = cos(q);\nconst float gain = 0.25;\nreturn (local + other) * gain;\n}\n', 'fragColor = vec4(shade(fragCoord), 0., 1.);'],
+	['members_without_indent', 'struct Sample\n{\nfloat weight;\nvec2 offset;\n};\n', 'Sample item = Sample(0.25, fragCoord); fragColor = vec4(item.offset * item.weight, 0., 1.);'],
 	// Large synthetic loops must fit DX9's minimum 512-slot budget without being unrolled.
 	['loop_dx9_braced', '', 'vec3 q = vec3(fragCoord * 0.01, 0.25); for (int k = 0; k < 96; k++) { q = sin(q * 1.13 + cos(q.yzx + 0.37)); } fragColor = vec4(q, 1.);', { dx9Budget: 512 }],
 	['loop_dx9_comma', '', 'vec3 q = vec3(fragCoord * 0.02, 0.75); float sum = 0.; for (int k = 0; k < 96; k++) q = cos(q.yzx * 1.21), sum += dot(q, q); fragColor = vec4(q, sum * 0.01);', { dx9Budget: 512 }],

@@ -376,6 +376,20 @@ hz = hoist('float one = 1.0;\nfloat s0 = sin(one);\nfloat two = 2.0;\nfloat t = 
 check('unrelated globals in between stay, and the order is kept', same(hz.globalInits, ['s0 = sin(one);', 't = s0 + two;']) && /static float two = 2\.0;/.test(hz.src), JSON.stringify(hz.globalInits));
 
 // ── several variables in one global declaration (3.0.33)
+const localScopeSrc = 'vec2 shade(vec2 q)\n{\nvec2 local = sin(q), other = cos(q);\nconst float gain = 0.25;\nreturn (local + other) * gain;\n}\nvoid mainImage(out vec4 color, vec2 pixel) { color = vec4(shade(pixel), 0., 1.); }';
+const localScopeResult = porter.transformGLSL(localScopeSrc, [], 'Image');
+check('unindented function locals are not made static', !/static (?:const )?(?:float2 local|float gain)/.test(localScopeResult.src), localScopeResult.src);
+check('unindented local initializers are not hoisted', localScopeResult.globalInits.length === 0 && /local = sin\(q\), other = cos\(q\)/.test(localScopeResult.src), JSON.stringify(localScopeResult.globalInits));
+const localSameLine = { src: 'float shade(float q){float x=q;float y=sin(q);return x+y;}' };
+porter.stepStaticGlobals(localSameLine);
+check('same-line local declarations are not made static', !/static/.test(localSameLine.src), localSameLine.src);
+const localStaticInit = { src: 'float shade(float q)\n{\nstatic float value = sin(q);\nreturn value;\n}' };
+porter.stepHoistGlobalInits(localStaticInit);
+check('even explicitly static locals are not hoisted out of their function', localStaticInit.globalInits.length === 0 && /value = sin\(q\)/.test(localStaticInit.src));
+const memberSrc = 'struct Sample\n{\nfloat weight;\n};\n';
+const memberCtx = { src: memberSrc };
+porter.stepStaticGlobals(memberCtx);
+check('unindented struct members are not made static', memberCtx.src === memberSrc, memberCtx.src);
 const sp = (text) => porter.splitGlobalDeclarators(text, []);
 check('a declaration with two variables becomes two', sp('float a = 1.0, b = 2.0;\n') === 'float a = 1.0;\nfloat b = 2.0;\n', JSON.stringify(sp('float a = 1.0, b = 2.0;\n')));
 check('a variable without an initialiser', sp('float a, b = 2.0, c;\n') === 'float a;\nfloat b = 2.0;\nfloat c;\n', JSON.stringify(sp('float a, b = 2.0, c;\n')));

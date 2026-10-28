@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.42';
+var PORTER_VERSION = '3.0.43';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -425,15 +425,31 @@ function stepSplitGlobalDeclarators(ctx)
 	ctx.src = s;
 }
 
+function fileScopeTokenOffsets(src)
+{
+	var offsets = Object.create(null);
+	var braces = 0, parens = 0, brackets = 0;
+	tokenizeSource(src).forEach(function (t)
+	{
+		if (t.type === 'ws' || t.type === 'comment' || t.type === 'placeholder' || t.type === 'preproc') { return; }
+		if (braces === 0 && parens === 0 && brackets === 0) { offsets[t.start] = true; }
+		if (t.text === '{') { braces++; }
+		else if (t.text === '}') { braces--; }
+		else if (t.text === '(') { parens++; }
+		else if (t.text === ')') { parens--; }
+		else if (t.text === '[') { brackets++; }
+		else if (t.text === ']') { brackets--; }
+	});
+	return offsets;
+}
+
 function stepConstToStaticConst(ctx)
 {
 	var s = ctx.src;
 	// ── const → static const  (file scope only) ───────────────────────────────
-	// Matches both line-start const and preprocessor-indented const (spaces only,
-	// no tab indent which would indicate function-scope).
+	var globals = fileScopeTokenOffsets(s);
 	s = s.replace(/^([ ]*)(const\s+)/gm, function (match, indent, kw, offset, str) {
-		// If indented with tabs it's inside a function body — leave alone
-		if (/\t/.test(indent)) { return match; }
+		if (!globals[offset + indent.length]) { return match; }
 		return indent + 'static ' + kw;
 	});
 	ctx.src = s;
@@ -458,8 +474,10 @@ function stepStaticGlobals(ctx)
 	var structNames = [];
 	s.replace(/\bstruct\s+(\w+)\s*\{/g, function (_, name) { structNames.push(name); return _; });
 	var globalTypes = 'float[234x]*|int[234]?|uint[234]?|bool' + structNames.map(function (n) { return '|' + n; }).join('');
+	var globals = fileScopeTokenOffsets(s);
 	s = s.replace(new RegExp('^(((?:' + globalTypes + ')\\s+))([a-zA-Z_]\\w*)\\s*(?=[,;=\\s\\[])', 'gm'),
 		function (match, typeAndSpace, type, name, offset, str) {
+			if (!globals[offset]) { return match; }
 			var lineStart = str.lastIndexOf('\n', offset) + 1;
 			var linePrefix = str.slice(lineStart, offset);
 			if (/\b(static|const|uniform|return|struct)\b/.test(linePrefix)) { return match; }
@@ -467,8 +485,10 @@ function stepStaticGlobals(ctx)
 			return 'static ' + match;
 		});
 	// Pass 2: handle  ;type  declarations on same line (e.g. float A,D,E;vec3 B,C;)
+	globals = fileScopeTokenOffsets(s);
 	s = s.replace(/;(float[234x]*|int[234]?|uint[234]?|bool)(\s+)([a-zA-Z_]\w*)\s*(?=[,;=\s])/gm,
 		function (match, type, space, name, offset, str) {
+			if (!globals[offset]) { return match; }
 			var lineStart = str.lastIndexOf('\n', offset) + 1;
 			if (/^\s+/.test(str.slice(lineStart, offset + 1))) { return match; } // indented
 			return ';static ' + type + space + name;
@@ -804,8 +824,10 @@ function stepHoistGlobalInits(ctx)
 	// one is hoisted as well, and so on down the file.
 	var globalInits = [];
 	var hoisted = [];
+	var globals = fileScopeTokenOffsets(s);
 	s = s.replace(/^static[ ]+(const[ ]+)?(float[234x]*|int[234]?|uint[234]?|bool)[ ]+(\w+)[ ]*=[ ]*([^;{«]*?);/gm,
-		function (match, isConst, type, name, init) {
+		function (match, isConst, type, name, init, offset) {
+			if (!globals[offset]) { return match; }
 			var callRe = /\b(?!(?:float[234]?(?:x[234])?|int[234]?|uint[234]?|bool)\b)[A-Za-z_]\w*\s*\(/;
 			var usesHoisted = hoisted.some(function (h) { return new RegExp('(?<![\\w.])' + h + '(?!\\w)').test(init); });
 			if (!callRe.test(init) && !usesHoisted) { return match; }
