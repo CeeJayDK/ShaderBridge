@@ -141,6 +141,15 @@ r = port('', 'int k = int(fragCoord.x) % 3; vec3 c = vec3(0.); switch (k) { case
 check('through the pipeline', /default: c = float3\(0\., 0\., 1\.\); break;/.test(r.out), r.out);
 
 // ── function-like macros are typed from their bodies (3.0.19)
+let compatMacro = porter.transformGLSL('#define SIZE int2(iResolution)\nvoid mainImage(out vec4 c, vec2 p) { c = vec4(vec2(SIZE), 0., 1.); }', [], 'Image').src;
+check('constructors inside object macros reach vector truncation', /int2\(iResolution.xy\)/.test(compatMacro), compatMacro);
+compatMacro = porter.transformGLSL('#define READ(p) texelFetch(iChannel0, ivec2(p), 0)\n#define ACTIVE(k) (READ(vec2(k,0)).x > 0.5)\nvoid mainImage(out vec4 c, vec2 p) { if ACTIVE(2) c = vec4(1.); else c = vec4(0.); }', [], 'Image', {emptySamplers:['iChannel0']}).src;
+check('nested lookup macros expose unconnected channels and unbraced conditions', !/if ACTIVE/.test(compatMacro) && /if \(float4\(0.0, 0.0, 0.0, 0.0\).x/.test(compatMacro), compatMacro);
+compatMacro = porter.transformGLSL('void mainImage(out vec4 c, vec2 p) { vec2 q; float d = (q = vec2(iResolution), dot(q,q)); c = vec4(d); }', [], 'Image').src;
+check('parenthesized comma expressions expose constructors to typed rewrites', /q = float2\(iResolution.xy\)/.test(compatMacro), compatMacro);
+const ambiguousMacro = {src:'#if OPTION\n#define SIZE int2(iResolution)\n#else\n#define SIZE int2(1,2)\n#endif\nvoid f(){int2 q=SIZE;}'};
+porter.stepCompatibilityMacros(ambiguousMacro);
+check('conditional macro definitions remain with the preprocessor', /q=SIZE/.test(ambiguousMacro.src));
 const matrixMacro = 'mat2 BASIS = mat2(1., 2., 3., 4.);\n#define APPLY(v) (BASIS * (v))\n';
 r = port(matrixMacro, 'fragColor = vec4(APPLY(fragCoord), 0., 1.);');
 check('matrix products inside macros reach the mul rewrite', /mul\(/.test(r.out) && !/APPLY\(fragCoord\)/.test(r.out), r.out);

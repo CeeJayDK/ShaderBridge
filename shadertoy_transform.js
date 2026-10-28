@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.45';
+var PORTER_VERSION = '3.0.46';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -423,6 +423,85 @@ function stepSplitGlobalDeclarators(ctx)
 	// several variables in one global declaration: one declaration per variable
 	s = splitGlobalDeclarators(s, messages);
 	ctx.src = s;
+}
+
+function stepCompatibilityMacros(ctx)
+{
+	// Expose constructors and lookups to the ordinary typed rewrites, including macros
+	// that hide them behind other macros. Keep directives for conditional compilation;
+	// ambiguous definitions and preprocessor metaprogramming stay with the preprocessor.
+	var tokens = tokenizeSource(ctx.src), definitions = Object.create(null), macros = Object.create(null);
+	var conditional = 0;
+	tokens.forEach(function (t)
+	{
+		if (t.type !== 'preproc') { return; }
+		var branch = /^#\s*(if|ifdef|ifndef|endif)\b/.exec(t.text);
+		if (branch) { conditional += branch[1] === 'endif' ? -1 : 1; }
+		var m = /^#\s*(define|undef)\s+([A-Za-z_]\w*)(\(([^)]*)\))?([^\n]*)/.exec(t.text.replace(/\\\r?\n/g, ' '));
+		if (!m) { return; }
+		definitions[m[2]] = (definitions[m[2]] || 0) + 1;
+		var body = m[5].replace(/«[⁰¹²³⁴⁵⁶⁷⁸⁹0-9]+»/g, ' ').trim();
+		var params = m[3] ? m[4].split(',').map(function (p) { return p.trim(); }).filter(Boolean) : null;
+		if (m[1] === 'define' && conditional === 0 && !/[#{};]/.test(body) && (!params || params.every(function (p) { return /^[A-Za-z_]\w*$/.test(p); })))
+		{
+			macros[m[2]] = { body: body, params: params };
+		}
+	});
+	Object.keys(macros).forEach(function (name) { if (definitions[name] !== 1) { delete macros[name]; } });
+	function needsExpansion(name, seen)
+	{
+		var macro = macros[name];
+		if (!macro || seen.indexOf(name) >= 0 || seen.length > 24) { return false; }
+		var bodyTokens = tokenizeSource(macro.body).filter(function (t) { return t.type !== 'ws'; });
+		return bodyTokens.some(function (t, i)
+		{
+			return t.type === 'ident' && ((/^(?:(?:float|int|uint|bool)[234]|texture\w*|texelFetch\w*|tex[23]D\w*|texCUBE\w*)$/.test(t.text) && bodyTokens[i + 1] && bodyTokens[i + 1].text === '(') || needsExpansion(t.text, seen.concat(name)));
+		});
+	}
+	var expansionCount = 0;
+	function expand(text, disabled)
+	{
+		if (disabled.length > 24 || text.length > 200000) { return text; }
+		var parts = tokenizeSource(text), out = '';
+		for (var i = 0; i < parts.length; i++)
+		{
+			var t = parts[i], macro = t.type === 'ident' && macros[t.text];
+			if (!macro || disabled.indexOf(t.text) >= 0 || !needsExpansion(t.text, [])) { out += t.text; continue; }
+			if (++expansionCount > 10000) { out += t.text; continue; }
+			var args = [], end = i;
+			if (macro.params)
+			{
+				var open = i + 1;
+				while (open < parts.length && (parts[open].type === 'ws' || parts[open].type === 'placeholder')) { open++; }
+				if (!parts[open] || parts[open].text !== '(') { out += t.text; continue; }
+				var depth = 1, start = open + 1;
+				for (end = start; end < parts.length; end++)
+				{
+					if (parts[end].text === '(') { depth++; }
+					else if (parts[end].text === ')') { depth--; }
+					if (depth === 0 || (depth === 1 && parts[end].text === ','))
+					{
+						args.push(parts.slice(start, end).map(function (p) { return p.text; }).join(''));
+						start = end + 1;
+						if (depth === 0) { break; }
+					}
+				}
+				if (macro.params.length === 0 && args.length === 1 && !args[0].trim()) { args = []; }
+				if (depth !== 0 || args.length !== macro.params.length) { out += t.text; continue; }
+			}
+			var replacements = Object.create(null);
+			(macro.params || []).forEach(function (p, index) { replacements[p] = expand(args[index], disabled.concat(t.text)); });
+			var body = tokenizeSource(macro.body).map(function (p)
+			{
+				return p.type === 'ident' && Object.prototype.hasOwnProperty.call(replacements, p.text) ? replacements[p.text] : p.text;
+			}).join('');
+			out += expand(body, disabled.concat(t.text));
+			if (out.length > 200000) { return text; }
+			i = end;
+		}
+		return out;
+	}
+	ctx.src = expand(ctx.src, []);
 }
 
 function fileScopeTokenOffsets(src)
@@ -966,6 +1045,7 @@ var TRANSFORM_STEPS = [
 	},
 	{ name: 'intrinsicNames', run: stepIntrinsicNames },
 	{ name: 'reservedIdentifiers', run: stepReservedIdentifiers },
+	{ name: 'compatibilityMacros', run: stepCompatibilityMacros, after: ['typeNames', 'reservedIdentifiers'], why: 'macro bodies must use the same type and identifier names as the expressions they expand into' },
 	{ name: 'splitGlobalDeclarators', run: stepSplitGlobalDeclarators, after: ['extractComments'], why: 'it moves comment placeholders and must see them rather than the comments' },
 	{
 		name: 'constToStaticConst',

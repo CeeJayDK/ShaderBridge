@@ -124,5 +124,14 @@ check('one pass: nothing is renamed', r.out.indexOf('_IMAGE') < 0 && r.out.index
 r = assemble(['float df(vec3 p) { return length(p) - 1.0; }\n' + fMain, 'float df(vec3 p) { return length(p) - 2.0; }\n' + fMain, 'float df(vec3 p) { return length(p) - 3.0; }\n' + fMain]);
 check('three passes, three bodies: each pass has its own', /float df\(float3 p\) \{ return length\(p\) - 1\.0; \}/.test(r.out) && /length\(p\) - 2\.0/.test(r.out) && /length\(p\) - 3\.0/.test(r.out) && (r.out.match(/float df\w*\(float3 p\)/g) || []).length === 3, r.out);
 
+const macroFetchSrc = '#define READ(p) texelFetch(iChannel0, ivec2(p), 0)\nvec4 readState(vec2 p) { return READ(p); }\nvoid mainImage(out vec4 c, vec2 p) { c = readState(p); }';
+const feedbackPass = makePass('bufA', macroFetchSrc);
+feedbackPass.channels = ['bufA']; feedbackPass.selfRefChannels = [0];
+const displayPass = makePass('image', macroFetchSrc);
+displayPass.channels = ['bufA'];
+const macroFetchOut = porter.assembleFxFile([feedbackPass, displayPass], true, [], null);
+check('macro-hidden buffer reads get different samplers for feedback and display', /iChannel0_Image/.test(macroFetchOut) && /tex_BufA_Prev/.test(macroFetchOut), macroFetchOut);
+check('helpers whose macro-hidden samplers differ are not merged across passes', /readState_IMAGE\(/.test(macroFetchOut) && count(macroFetchOut, /float4 readState\w*\(/g) === 2, macroFetchOut);
+
 console.log((total - bad) + '/' + total + ' common-tab tests OK');
 process.exit(bad ? 1 : 0);

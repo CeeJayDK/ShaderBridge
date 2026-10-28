@@ -1,6 +1,9 @@
 // Small GLSL idioms common in Shadertoy shaders. Each entry: [id, helpers (global code), body of mainImage].
 // Every one is valid GLSL ES 3.00 as Shadertoy accepts it; the porter must turn it into a compiling effect.
 module.exports = [
+	['macro_vector_cast', '#define PIXELS ivec2(iResolution)\n', 'fragColor = vec4(vec2(PIXELS), 0., 1.);'],
+	['macro_empty_lookup', '#define SAMPLE(p) texelFetch(iChannel0, ivec2(p), 0)\n#define PRESSED(k) (SAMPLE(vec2(k,0)).x > 0.5)\n', 'fragColor = vec4(float(PRESSED(2)));', { channel0: 'none' }],
+	['comma_constructor', '', 'vec2 q; float d = (q = vec2(iResolution), dot(q,q)); fragColor = vec4(d);'],
 	['dx9_shift_and_mask', '', 'int k = int(fragCoord.x); fragColor = vec4(float((k >> 1) & 1), float(k & 3), float((k >> 2) & 7), 1.);', { dx9Budget: 512 }],
 	['dx9_negative_shift_mask', '', 'int k = -int(fragCoord.x) - 1; fragColor = vec4(float(k >> 2), float(k & 3), 0., 1.);', { dx9Budget: 512 }],
 	['macro_matrix_products', 'mat2 BASIS = mat2(1., 2., 3., 4.);\n#define ENERGY(v) dot(BASIS * (v), (v) * BASIS)\n', 'fragColor = vec4(ENERGY(fragCoord * 0.01));'],

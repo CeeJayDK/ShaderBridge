@@ -662,6 +662,17 @@ function anAddParser(an)
 			if (t.type === 'punct' && t.text === '(')
 			{
 				var inner = parseAssign(p + 1);
+				if (inner && txt(inner.next) === ',')
+				{
+					var items = [inner.node];
+					while (txt(inner.next) === ',')
+					{
+						inner = parseAssign(inner.next + 1);
+						if (!inner) { return null; }
+						items.push(inner.node);
+					}
+					inner.node = { kind: 'sequence', from: items[0].from, to: inner.node.to, type: inner.node.type, items: items };
+				}
 				if (!inner || txt(inner.next) !== ')') { return null; }
 				return { node: { kind: 'paren', from: p, to: inner.next, type: inner.node.type, child: inner.node }, next: inner.next + 1 };
 			}
