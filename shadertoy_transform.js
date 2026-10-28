@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.41';
+var PORTER_VERSION = '3.0.42';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -481,13 +481,9 @@ function stepUnreachableCode(ctx)
 {
 	var s = ctx.src;
 	// ── Remove unreachable statements after return (ReShade FX errors on these) ─
-	// Case 1: two return statements on consecutive lines
-	// (handles both normal semicolon-suffix and prefix-semicolon golf style)
-	s = s.replace(/(\breturn\b[^\n;{}]+;?\s*\n[\s«»⁰¹²³⁴⁵⁶⁷⁸⁹]*)\s*;?\s*\breturn\b[^\n;{}]+;?/g,
-		function (match, first) {
-			return first.trimEnd();
-		});
-	// Case 2: lone ; before } after a return, where a commented-out statement
+	// A return on the next line may be the fallback after an unbraced if/else/loop.
+	// Leave return removal to the token-aware pass below, which checks the statement context.
+	// Lone ; before } after a return, where a commented-out statement
 	// (placeholder line) sits between them — Yoda-semicolon golf closing brace.
 	// Requires at least one placeholder line between return and ;} so we don't
 	// eat the ; in normal single-statement functions like {return x;}
@@ -498,7 +494,7 @@ function stepUnreachableCode(ctx)
 		function (match, ret, middle) {
 			return ret + '\n' + middle;
 		});
-	// Case 3: anything after a return that stands on its own in a block, however it is laid out
+	// Anything after a return that stands on its own in a block, however it is laid out
 	s = removeCodeAfterReturn(s);
 	ctx.src = s;
 }

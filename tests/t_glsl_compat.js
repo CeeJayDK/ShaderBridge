@@ -455,6 +455,15 @@ keyOut = withOptions('', 'fragColor = texture(iChannel3, fragCoord / iResolution
 check('through the pipeline: without the option nothing is replaced', /tex2D\(iChannel3/.test(keyOut), keyOut);
 
 // ── code after a return in the same block (3.0.36)
+const fallback = 'float choose(float x)\n{\n\tif (x < 0.)\n\t\treturn 0.;\n\n\treturn x * 0.75;\n}\n';
+r = port(fallback, 'fragColor = vec4(choose(fragCoord.x));');
+check('a fallback return after an unbraced if survives the pipeline', has(r, 'return x * 0.75;'), r.out);
+r = port('float choose(float x)\n{\n\tif (x > 2.) x = 2.;\n\telse return 0.;\n\treturn x;\n}\n', 'fragColor = vec4(choose(fragCoord.x));');
+check('a return after an unbraced else survives the pipeline', has(r, 'return x;'), r.out);
+r = port('float choose(float x)\n{\n\twhile (x > 2.)\n\t\treturn 1.;\n\treturn x;\n}\n', 'fragColor = vec4(choose(fragCoord.x));');
+check('a fallback return after an unbraced loop survives the pipeline', has(r, 'return x;'), r.out);
+r = port('float choose(float x)\n{\n\treturn x\n\t;return 1.;\n}\n', 'fragColor = vec4(choose(fragCoord.x));');
+check('unreachable prefix-semicolon returns are still removed', !has(r, 'return 1.;') && has(r, 'return x'), r.out);
 const ra = (text) => porter.removeCodeAfterReturn(text);
 check('two returns on one line', ra('float f(){return 1.0;return 2.0;}') === 'float f(){return 1.0;}', ra('float f(){return 1.0;return 2.0;}'));
 check('every statement after the return, to the end of the block', ra('float f(){ return a; b = 1.0; if (x) { c = 2.0; } }') === 'float f(){ return a; }', ra('float f(){ return a; b = 1.0; if (x) { c = 2.0; } }'));

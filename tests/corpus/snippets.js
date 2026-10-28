@@ -140,6 +140,8 @@ module.exports = [
 	['empty_channel_loop', '', 'vec4 c = vec4(0.); for (int i = 0; i < 4; i++) { c += texture(iChannel0, fragCoord / iResolution.xy); } fragColor = c;', { channel0: 'none' }],
 	['empty_channel_fetch', '', 'fragColor = texelFetch(iChannel0, ivec2(fragCoord), 0);', { channel0: 'none' }],
 	// ── a return followed by more code in the same block: ReShade FX rejects unreachable code
+	['return_conditional_fallback', 'float choose(float x)\n{\n\tif (x < 0.)\n\t\treturn 0.;\n\n\treturn x * 0.75;\n}\n', 'fragColor = vec4(choose(fragCoord.x));'],
+	['return_else_fallback', 'float choose(float x)\n{\n\tif (x > 2.) x = 2.;\n\telse return 0.;\n\treturn x;\n}\n', 'fragColor = vec4(choose(fragCoord.x));'],
 	['return_return_same_line', 'vec2 noise(vec3 x){return x.xy;return x.yx;}\n', 'fragColor = vec4(noise(vec3(fragCoord, 1.)), 0., 1.);'],
 	['return_then_statements', 'float f(float x)\n{\n\treturn x * 2.0; x = 3.0; if (x > 1.0) { x = 4.0; }\n}\n', 'fragColor = vec4(f(fragCoord.x));'],
 	['return_in_switch_then_case', 'float f(int i)\n{\n\tswitch (i)\n\t{\n\tcase 0: return 1.0; i = 5;\n\tcase 1: return 2.0;\n\tdefault: return 3.0;\n\t}\n}\n', 'fragColor = vec4(f(int(fragCoord.x)));'],
