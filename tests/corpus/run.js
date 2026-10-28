@@ -45,7 +45,7 @@ function compile(file, flags)
 	let r = spawnSync(CLI, ['--list-entry-points', file], { encoding: 'utf8' });
 	const front = r.stdout + r.stderr;
 	if (r.status !== 0 || /error/.test(front)) { return { stage: 'frontend', text: front }; }
-	if (flags && flags.noDxbc) { return null; }
+	if (flags && flags.noDxbc && process.platform !== 'win32') { return null; }
 	const errFile = path.join(outDir, 'dxbc.err');
 	r = spawnSync(CLI, ['--dxbc', '--shader-model', '50', '-E', 'F__PS_ShadertoyMain', '-Fe', errFile, '-Fo', path.join(outDir, 'dxbc.bin'), file], { encoding: 'utf8' });
 	if (r.status !== 0) { return { stage: 'dxbc', text: fs.existsSync(errFile) ? fs.readFileSync(errFile, 'utf8') : r.stdout + r.stderr }; }

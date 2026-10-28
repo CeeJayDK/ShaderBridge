@@ -16,7 +16,7 @@ Run with Node (no dependencies):
 | `t_texelfetch.js` | `texelFetch` / `textureSize`, and row-mirrored fetches from Vflip textures (20) |
 | `t_samplers.js` | sampler and texture names clashing across passes (15) |
 | `t_common.js` | a Common tab reaches the assembler once per pass; structs, globals and functions that the passes define differently get names of their own, the same ones are defined once (39) |
-| `t_glsl_compat.js` | reserved words, `precision`, static globals, array and diagonal-matrix constructors, comparison functions, switch, macro typing, `inverse` / `outerProduct` / `matrixCompMult`, the texture offset / projection lookups, `gl_FragCoord` as a global, cubemap lookups through `texture()` (253) |
+| `t_glsl_compat.js` | reserved words, `precision`, static globals, array and diagonal-matrix constructors, comparison functions, switch, macro typing, `inverse` / `outerProduct` / `matrixCompMult`, the texture offset / projection lookups, `gl_FragCoord` as a global, cubemap lookups through `texture()` (254) |
 | `t_functions.js` | ReShade FX has no forward declarations: declarations are removed and callers moved after the functions they call (21) |
 | `t_pipeline.js` | the transform is a list of named steps: the order that matters is declared and checked, and every step proves on its own example that it does something (98) |
 | `t_cubemap.js` | the cubemap helper agrees with the OpenGL cube map table, face order and orientation (28) |
@@ -38,7 +38,7 @@ Run with Node (no dependencies):
 `corpus/snippets.js` is the quickest way to find what the porter still gets wrong. Add an idiom, run
 `node corpus/run.js`, and the real compiler says whether the port compiles. Every fix in the 3.0.16 to 3.0.20 range
 began as a failing snippet. A snippet can carry `{ noDxbc: 'reason' }` to skip the DXBC stage when only vkd3d,
-the stand-in for the Direct3D compiler, objects.
+the stand-in for the Direct3D compiler, objects. Windows always runs the DXBC stage using Microsoft's compiler.
 
 ## Trying new shaders
 

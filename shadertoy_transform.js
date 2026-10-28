@@ -2008,7 +2008,7 @@ var RESERVED_IDENTIFIERS = (function ()
 		+ 'foreach interface samplerCUBE '
 		// reserved by HLSL itself rather than by ReShade's lexer; ReShade writes local names straight into the HLSL
 		// that the Direct3D compiler then reads, so these fail there even though ReShade's own parser accepts them
-		+ 'export triangle triangleadj lineadj cbuffer tbuffer NULL stateblock stateblock_state fxgroup technique10 technique11 '
+		+ 'decl export triangle triangleadj lineadj cbuffer tbuffer NULL stateblock stateblock_state fxgroup technique10 technique11 '
 		+ 'pixelfragment vertexfragment compile_fragment CompileShader BlendState DepthStencilState DepthStencilView RasterizerState '
 		+ 'RenderTargetView SamplerComparisonState Buffer ByteAddressBuffer StructuredBuffer AppendStructuredBuffer ConsumeStructuredBuffer '
 		+ 'RWBuffer RWByteAddressBuffer RWStructuredBuffer RWTexture1D RWTexture1DArray RWTexture2D RWTexture2DArray RWTexture3D '

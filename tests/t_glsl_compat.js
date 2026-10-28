@@ -29,6 +29,8 @@ r = port('', 'float triangle = 1.; float sampler = 2.; float technique = 3.; flo
 check('sampler / technique / compile renamed', has(r, 'sampler_ ') && has(r, 'technique_') && has(r, 'compile_'));
 r = port('', 'float dword = 1.; float unorm = 2.; float snorm = 3.; fragColor = vec4(dword + unorm + snorm);');
 check('dword / unorm / snorm renamed', has(r, 'dword_') && has(r, 'unorm_') && has(r, 'snorm_'));
+r = port('', 'float decl = 4.; fragColor = vec4(decl);');
+check('decl is renamed for the Direct3D compiler', has(r, 'float decl_ = 4.;') && !/\bdecl\b/.test(r.out), r.out);
 r = port('', 'float point = 1.; float line = 2.; float linear = 3.; float sample = 4.; int pass = 5; fragColor = vec4(point + line + linear + sample + float(pass));');
 check('the original five still renamed', has(r, 'point_') && has(r, 'line_') && has(r, 'linear_') && has(r, 'sample_') && has(r, 'pass_'));
 r = port('float line(vec2 p) { return p.x; }\nfloat sample(vec2 p) { return p.y; }\n', 'fragColor = vec4(line(fragCoord), sample(fragCoord), 0., 1.);');
