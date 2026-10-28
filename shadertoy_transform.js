@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.43';
+var PORTER_VERSION = '3.0.44';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -1404,8 +1404,64 @@ function rewriteVectorEquality(src, messages)
 // Expressions whose operand types cannot be determined are left alone.
 // ─────────────────────────────────────────────────────────────────────────────
 
+function expandMatrixExpressionMacros(src, messages)
+{
+	if (!/#\s*define\b/.test(src)) { return src; }
+	function isMatrix(type) { var p = type && anParseType(type); return p && p.kind === 'mat'; }
+	var expanded = 0;
+	for (var pass = 0; pass < 5; pass++)
+	{
+		var A = analyzeSource(src);
+		var definitions = Object.create(null);
+		A.tokens.forEach(function (t)
+		{
+			var m = t.type === 'preproc' && /^#\s*(?:define|undef)\s+([A-Za-z_]\w*)/.exec(t.text);
+			if (m) { definitions[m[1]] = (definitions[m[1]] || 0) + 1; }
+		});
+		var matrices = Object.create(null);
+		A.decls.forEach(function (d) { if (d.global && isMatrix(d.type)) { matrices[d.name] = true; } });
+		Object.keys(A.functions).forEach(function (name)
+		{
+			if (A.functions[name].some(function (fn) { return isMatrix(fn.ret); })) { matrices[name] = true; }
+		});
+		function matrixBody(name, seen)
+		{
+			var macro = A.macros[name];
+			if (!macro || definitions[name] !== 1 || seen.indexOf(name) >= 0 || seen.length > 5) { return false; }
+			return tokenizeSource(macro.body).some(function (t)
+			{
+				return t.type === 'ident' && (matrices[t.text] || isMatrix(t.text) || matrixBody(t.text, seen.concat(name)));
+			});
+		}
+		var changed = 0;
+		var result = rewriteExpressions(src, function (node, render)
+		{
+			if (node.kind !== 'call') { return null; }
+			var macro = A.macros[node.name];
+			if (!macro || definitions[node.name] !== 1 || !macro.fn || !macro.params || macro.params.length !== node.args.length || /[#{};]/.test(macro.body)) { return null; }
+			if (macro.params.some(function (p) { return !/^[A-Za-z_]\w*$/.test(p); })) { return null; }
+			var hasProduct = /\*/.test(macro.body);
+			var hasNestedMacro = tokenizeSource(macro.body).some(function (t) { return t.type === 'ident' && A.macros[t.text] && A.macros[t.text].fn; });
+			if ((!hasProduct && !hasNestedMacro) || (!matrixBody(node.name, []) && !node.args.some(function (arg) { return isMatrix(arg.type); }))) { return null; }
+			var args = Object.create(null);
+			macro.params.forEach(function (p, i) { args[p] = '(' + render(node.args[i]) + ')'; });
+			changed++;
+			return '(' + tokenizeSource(macro.body).map(function (t)
+			{
+				return t.type === 'ident' && Object.prototype.hasOwnProperty.call(args, t.text) ? args[t.text] : t.text;
+			}).join('') + ')';
+		});
+		if (!changed) { break; }
+		expanded += changed;
+		src = result.src;
+	}
+	if (expanded && messages) { messages.push({ level: 'info', text: 'Expanded ' + expanded + ' matrix expression macro call(s) so their products can be rewritten.' }); }
+	return src;
+}
+
 function rewriteInlineMatrixMul(src, messages)
 {
+	src = expandMatrixExpressionMacros(src, messages);
 	function isMatrix(type)
 	{
 		var parsed = type && anParseType(type);

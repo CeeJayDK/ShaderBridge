@@ -141,6 +141,19 @@ r = port('', 'int k = int(fragCoord.x) % 3; vec3 c = vec3(0.); switch (k) { case
 check('through the pipeline', /default: c = float3\(0\., 0\., 1\.\); break;/.test(r.out), r.out);
 
 // ── function-like macros are typed from their bodies (3.0.19)
+const matrixMacro = 'mat2 BASIS = mat2(1., 2., 3., 4.);\n#define APPLY(v) (BASIS * (v))\n';
+r = port(matrixMacro, 'fragColor = vec4(APPLY(fragCoord), 0., 1.);');
+check('matrix products inside macros reach the mul rewrite', /mul\(/.test(r.out) && !/APPLY\(fragCoord\)/.test(r.out), r.out);
+r = port(matrixMacro + '#define WRAP(v) APPLY(v)\n', 'fragColor = vec4(WRAP(fragCoord), 0., 1.);');
+check('nested matrix macros are expanded at their call sites', !/WRAP\(fragCoord\)/.test(r.out) && /mul\(/.test(r.out), r.out);
+r = port('#define APPLY(m,v) ((m) * (v))\n', 'mat2 basis = mat2(1.); fragColor = vec4(APPLY(basis, fragCoord), 0., 1.);');
+check('a matrix passed as a macro argument is rewritten', !/APPLY\(basis, fragCoord\)/.test(r.out) && /mul\(/.test(r.out), r.out);
+r = port('#define SCALE(v) ((v) * 2.0)\n', 'fragColor = vec4(SCALE(fragCoord), 0., 1.);');
+check('scalar-only arithmetic macros stay macros', /SCALE\(fragCoord\)/.test(r.out), r.out);
+r = port(matrixMacro + '#undef APPLY\n#define APPLY(v) ((v) * 2.0)\n', 'fragColor = vec4(APPLY(fragCoord), 0., 1.);');
+check('redefined macros stay under the preprocessor rather than choosing one definition', /APPLY\(fragCoord\)/.test(r.out), r.out);
+r = port(matrixMacro, 'vec2 q = APPLY(fragCoord.xy + vec2(1.)); fragColor = vec4(q, 0., 1.);');
+check('expanded macro arguments keep their expression grouping', /mul\(\(\(fragCoord.xy \+ float2\(1\., 1\.\)\)\)\), BASIS\)/.test(r.out) || /mul\([^;]*fragCoord.xy \+ float2\(1\., 1\.\)/.test(r.out), r.out);
 const MACROS = '#define SQ(x) ((x) * (x))\n#define LEN2(v) dot(v, v)\n#define TWICE(x) (2.0 * SQ(x))\n#define PICK(a, b, t) lerp(a, b, t)\n'
 	+ '#define STR(x) #x\n#define CAT(a, b) a ## b\n#define LONG(x) \\\n\t(x + 1.0)\n#define NOARGS() 3.0\n';
 function macroType(expr)
