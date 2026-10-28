@@ -646,6 +646,9 @@ function convert()
 	}
 
 	// Transform each pass
+	// Unreferenced buffers have no side effects outside their textures. Avoid converting unused
+	// passes, including cubemap demos that do not contribute to the final image.
+	passList = selectImageDependencies(passList);
 	var multipass = passList.length > 1;
 	var transformedPasses = passList.map(function(p)
 	{

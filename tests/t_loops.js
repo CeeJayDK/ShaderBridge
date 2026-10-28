@@ -23,6 +23,7 @@ check('comments, macro lines and substrings stay unchanged', hint(comments) === 
 check('a comment between for and its header is accepted', count(hint('for /* counter */ (int k = 0; k < 8; k++) x++;')) === 1);
 check('an explicit unroll attribute is respected', hint('[unroll] for (;;) x++;') === '[unroll] for (;;) x++;');
 check('an explicit loop attribute is respected', hint('[loop] for (;;) x++;') === '[loop] for (;;) x++;');
+check('constant loops exceeding SM3 limits are left available for unrolling', hint('for (int k = 0; k < 256; k++) x++;') === 'for (int k = 0; k < 256; k++) x++;');
 check('running the hint step twice does not duplicate attributes', hint(hint('for (;;) x++;')) === hint('for (;;) x++;'));
 check('a do-while tail never gets a for-loop hint', hint('do { x++; } while (x < 8);') === 'do { x++; } while (x < 8);');
 const messages = [];

@@ -15,16 +15,16 @@ Run with Node (no dependencies):
 | `t_vflip.js` | V flip at texture sample sites, with the flag passed through sampler parameters, including the offset overloads (40) |
 | `t_texelfetch.js` | `texelFetch` / `textureSize`, and row-mirrored fetches from Vflip textures (20) |
 | `t_samplers.js` | sampler and texture names clashing across passes (15) |
-| `t_common.js` | a Common tab reaches the assembler once per pass; structs, globals and functions that the passes define differently get names of their own, the same ones are defined once (42) |
-| `t_glsl_compat.js` | reserved words, `precision`, static globals, array and diagonal-matrix constructors, comparison functions, switch, macro typing and matrix expressions, `inverse` / `outerProduct` / `matrixCompMult`, texture lookups, `gl_FragCoord`, conditional fallback returns, file-scope detection, and DX9 constant shifts and low-bit masks (285) |
+| `t_common.js` | Common declarations are shared or renamed across passes as needed; only passes contributing to Image are selected (43) |
+| `t_glsl_compat.js` | reserved words, `precision`, static globals, array and matrix constructors, comparison functions, switch, macro typing and name collisions, rectangular matrix expressions, `inverse` / `outerProduct` / `matrixCompMult`, texture lookups, visual sample-rate declarations, `gl_FragCoord`, conditional fallback returns, file-scope detection, and DX9 constant shifts and low-bit masks (291) |
 | `t_functions.js` | ReShade FX has no forward declarations: declarations are removed and callers moved after the functions they call (21) |
 | `t_pipeline.js` | the transform is a list of named steps: the order that matters is declared and checked, and every step proves on its own example that it does something (105) |
-| `t_loops.js` | DX9 for-loop hints, nested and unbraced bodies, explicit attributes, and function reordering (12) |
+| `t_loops.js` | DX9 for-loop hints, large constant loops, nested and unbraced bodies, explicit attributes, and function reordering (13) |
 | `t_frames.js` | an effect-local frame counter starts at zero after loading, uses separate read/write textures, and runs before shader passes (5) |
 | `t_cubemap.js` | the cubemap helper agrees with the OpenGL cube map table, face order and orientation (28) |
-| `t_contrast.js` | the page is readable: every text colour has enough contrast, and the critical styles agree with the stylesheet (69) |
+| `t_contrast.js` | the page is readable: every text colour has enough contrast, and the critical styles agree with the stylesheet (70) |
 | `t_standalone.js` | the .fx includes nothing: it declares its own vertex shader and screen texture and carries its own helpers (16) |
-| `corpus/run.js` | 152 small GLSL idioms, each ported and compiled with the real ReShade compiler; synthetic DX9 loops and bit operations also check the instruction-slot budget on Windows |
+| `corpus/run.js` | 157 small GLSL idioms, each ported and compiled with the real ReShade compiler; synthetic DX9 loops and bit operations also check the instruction-slot budget on Windows |
 | `roundtrip.js` | the lexer must reproduce every shader source exactly |
 
 ## Environment

@@ -78,7 +78,7 @@ function anMulType(a, b)
 	return null;
 }
 
-// GLSL operator '*' on GLSL-origin types (matrices still in GLSL meaning; square only)
+// GLSL operator '*' on GLSL-origin types (matrix dimensions retain transposed storage).
 function anBinaryType(op, lt, rt)
 {
 	if (op === '&&' || op === '||') { return 'bool'; }
@@ -99,8 +99,9 @@ function anBinaryType(op, lt, rt)
 	{
 		if (op === '*')
 		{
-			if (pl.kind === 'mat' && pr.kind === 'vec') { return anVec('float', pl.rows); }
-			if (pl.kind === 'vec' && pr.kind === 'mat') { return anVec('float', pr.cols); }
+			if (pl.kind === 'mat' && pr.kind === 'vec') { return anVec('float', pl.cols); }
+			if (pl.kind === 'vec' && pr.kind === 'mat') { return anVec('float', pr.rows); }
+			if (pl.kind === 'mat' && pr.kind === 'mat') { return 'float' + pr.rows + 'x' + pl.cols; }
 		}
 		if (pl.kind === 'mat') { return lt; }
 		return rt;

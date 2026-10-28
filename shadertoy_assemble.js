@@ -14,6 +14,24 @@ var HELPER_SOURCE =
 // BUILD RESHADE UNIFORM DECLARATIONS
 // ═════════════════════════════════════════════════════════════════════════════
 
+function selectImageDependencies(passes)
+{
+	var needed = { image: true }, changed = true;
+	while (changed)
+	{
+		changed = false;
+		passes.forEach(function (p)
+		{
+			if (!needed[p.id]) { return; }
+			(p.channels || []).forEach(function (channel)
+			{
+				if (!needed[channel] && passes.some(function (candidate) { return candidate.id === channel; })) { needed[channel] = true; changed = true; }
+			});
+		});
+	}
+	return passes.filter(function (p) { return needed[p.id]; });
+}
+
 function buildUniformBlock(usedUniforms) {
 	var lines = [];
 
@@ -55,6 +73,11 @@ function buildUniformBlock(usedUniforms) {
 		sep();
 		lines.push('// iDate — float4(year, month 1-12, day 1-31, seconds since midnight)');
 		lines.push('uniform float4 iDate < source = "date"; >;');
+	}
+	if (usedUniforms.has('iSampleRate')) {
+		sep();
+		lines.push('// Audio is unavailable; expose the conventional sample rate for visual shaders.');
+		lines.push('static const float iSampleRate = 44100.0;');
 	}
 	if (usedUniforms.has('iMouse')) {
 		sep();

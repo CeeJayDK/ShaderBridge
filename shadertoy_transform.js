@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.50';
+var PORTER_VERSION = '3.0.51';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -12,8 +12,8 @@ function analyzeShader(src, messages) {
 	if (!/\bmainImage\b/.test(src)) {
 		messages.push({ level: 'error', text: 'No mainImage() found. Is this an Image tab shader?' });
 	}
-	if (/\biSampleRate\b/.test(src) || /\bmainSound\b/.test(src)) {
-		messages.push({ level: 'error', text: 'Sound shader detected (iSampleRate / mainSound). Sound is not supported in ReShade.' });
+	if (/\bmainSound\s*\(/.test(src)) {
+		messages.push({ level: 'error', text: 'Sound shader entry point detected (mainSound). Sound is not supported in ReShade.' });
 	}
 	if (/#version\b/.test(src)) {
 		messages.push({ level: 'info', text: '#version directive removed (not used in HLSL / ReShade FX).' });
@@ -50,7 +50,7 @@ function detectUniforms(src, usedUniforms) {
 	var keywords =
 		[
 			'iResolution', 'iTime', 'iTimeDelta', 'iFrameRate', 'iFrame',
-			'iDate', 'iMouse', 'iChannelTime', 'iChannelResolution',
+			'iDate', 'iMouse', 'iSampleRate', 'iChannelTime', 'iChannelResolution',
 			'iChannel0', 'iChannel1', 'iChannel2', 'iChannel3'
 		];
 	keywords.forEach(function (u) {
@@ -379,6 +379,7 @@ function stepTypeNames(ctx)
 	s = s.replace(/\bivec([234])\b/g, 'int$1');
 	s = s.replace(/\buvec([234])\b/g, 'uint$1');
 	s = s.replace(/\bbvec([234])\b/g, 'bool$1');
+	s = s.replace(/\bmat([234])x([234])\b/g, 'float$1x$2');
 	s = s.replace(/\bmat([234])\b/g, 'float$1x$1');
 	ctx.src = s;
 }
@@ -458,11 +459,45 @@ function stepUnsignedFloatConstants(ctx)
 
 function stepCompatibilityMacros(ctx)
 {
+	// ReShade's preprocessor can drop a bare identifier that also names a function macro.
+	// Give variables distinct names while retaining macro calls and directive names.
+	var macroVariables = Object.create(null);
+	var declaredVariables = Object.create(null);
+	analyzeSource(ctx.src).decls.forEach(function (d) { declaredVariables[d.name] = true; });
+	tokenizeSource(ctx.src).forEach(function (t)
+	{
+		var m = t.type === 'preproc' && /^#\s*define\s+([A-Za-z_]\w*)\(/.exec(t.text);
+		if (m && declaredVariables[m[1]])
+		{
+			var name = 'ST_var_' + m[1];
+			while (ctx.src.indexOf(name) >= 0) { name += '_'; }
+			macroVariables[m[1]] = name;
+		}
+	});
+	function renameBare(text)
+	{
+		var parts = tokenizeSource(text), quoted = /"(?:\\[\s\S]|[^"\\])*"/g, spans = [], m;
+		while ((m = quoted.exec(text))) { spans.push([m.index, quoted.lastIndex]); }
+		return parts.map(function (t, i)
+		{
+			if (t.type !== 'ident' || !macroVariables[t.text] || spans.some(function (s) { return t.start >= s[0] && t.start < s[1]; })) { return t.text; }
+			var j = i + 1;
+			while (j < parts.length && (parts[j].type === 'ws' || parts[j].type === 'placeholder' || parts[j].type === 'comment')) { j++; }
+			return parts[j] && parts[j].text === '(' ? t.text : macroVariables[t.text];
+		}).join('');
+	}
+	ctx.src = tokenizeSource(ctx.src).map(function (t)
+	{
+		if (t.type !== 'preproc') { return t.text; }
+		var m = /^(#\s*define\s+)([\s\S]*)$/.exec(t.text);
+		return m ? m[1] + renameBare(m[2]) : t.text;
+	}).join('');
+	ctx.src = rewriteOutsideDirectives(ctx.src, renameBare);
 	// Expose constructors and lookups to the ordinary typed rewrites, including macros
 	// that hide them behind other macros. Keep directives for conditional compilation;
 	// ambiguous definitions and preprocessor metaprogramming stay with the preprocessor.
-	var tokens = tokenizeSource(ctx.src), definitions = Object.create(null), macros = Object.create(null);
-	var conditional = 0;
+	var tokens = tokenizeSource(ctx.src), macros = Object.create(null);
+	var conditional = 0, definitionKeys = Object.create(null), conflicts = Object.create(null);
 	tokens.forEach(function (t)
 	{
 		if (t.type !== 'preproc') { return; }
@@ -470,26 +505,29 @@ function stepCompatibilityMacros(ctx)
 		if (branch) { conditional += branch[1] === 'endif' ? -1 : 1; }
 		var m = /^#\s*(define|undef)\s+([A-Za-z_]\w*)(\(([^)]*)\))?([^\n]*)/.exec(t.text.replace(/\\\r?\n/g, ' '));
 		if (!m) { return; }
-		definitions[m[2]] = (definitions[m[2]] || 0) + 1;
 		var body = m[5].replace(/«[⁰¹²³⁴⁵⁶⁷⁸⁹0-9]+»/g, ' ').trim();
 		var params = m[3] ? m[4].split(',').map(function (p) { return p.trim(); }).filter(Boolean) : null;
+		var key = (m[3] || '') + '|' + tokenizeSource(body).filter(function (t) { return t.type !== 'ws'; }).map(function (t) { return t.text; }).join('');
+		if (m[1] === 'undef' || (definitionKeys[m[2]] !== undefined && definitionKeys[m[2]] !== key)) { conflicts[m[2]] = true; }
+		definitionKeys[m[2]] = key;
 		if (m[1] === 'define' && conditional === 0 && !/#/.test(body) && (!params || params.every(function (p) { return /^[A-Za-z_]\w*$/.test(p); })))
 		{
 			macros[m[2]] = { body: body, params: params };
 		}
 	});
-	Object.keys(macros).forEach(function (name) { if (definitions[name] !== 1) { delete macros[name]; } });
+	Object.keys(macros).forEach(function (name) { if (conflicts[name]) { delete macros[name]; } });
 	function needsExpansion(name, seen)
 	{
 		var macro = macros[name];
 		if (!macro || seen.indexOf(name) >= 0 || seen.length > 24) { return false; }
 		if (/\bmainImage\s*\(/.test(macro.body)) { return true; }
+		if (/[{};]/.test(macro.body)) { return true; }
 		var bodyTokens = tokenizeSource(macro.body).filter(function (t) { return t.type !== 'ws'; });
 		return bodyTokens.some(function (t, i)
 		{
 			var constructorOrLookup = /^(?:(?:float|int|uint|bool)[234]|texture\w*|texelFetch\w*|tex[23]D\w*|texCUBE\w*)$/.test(t.text);
-			var statementMatrix = /[{};]/.test(macro.body) && /^float[234]x[234]$/.test(t.text);
-			return t.type === 'ident' && (((constructorOrLookup || statementMatrix) && bodyTokens[i + 1] && bodyTokens[i + 1].text === '(') || needsExpansion(t.text, seen.concat(name)));
+			var rectangular = /^float([234])x([234])$/.exec(t.text);
+			return t.type === 'ident' && (((constructorOrLookup || (rectangular && rectangular[1] !== rectangular[2])) && bodyTokens[i + 1] && bodyTokens[i + 1].text === '(') || needsExpansion(t.text, seen.concat(name)));
 		});
 	}
 	var expansionCount = 0;
@@ -588,15 +626,11 @@ function stepStaticGlobals(ctx)
 	s.replace(/\bstruct\s+(\w+)\s*\{/g, function (_, name) { structNames.push(name); return _; });
 	var globalTypes = 'float[234x]*|int[234]?|uint[234]?|bool' + structNames.map(function (n) { return '|' + n; }).join('');
 	var globals = fileScopeTokenOffsets(s);
-	s = s.replace(new RegExp('^(((?:' + globalTypes + ')\\s+))([a-zA-Z_]\\w*)\\s*(?=[,;=\\s\\[])', 'gm'),
-		function (match, typeAndSpace, type, name, offset, str) {
-			if (!globals[offset]) { return match; }
+	s = s.replace(new RegExp('^([ \\t]*)((?:' + globalTypes + ')\\s+)([a-zA-Z_]\\w*)\\s*(?=[,;=\\s\\[])', 'gm'),
+		function (match, indent, type, name, offset, str) {
+			if (!globals[offset + indent.length]) { return match; }
 			if (/^\s*\(/.test(str.slice(offset + match.length))) { return match; }
-			var lineStart = str.lastIndexOf('\n', offset) + 1;
-			var linePrefix = str.slice(lineStart, offset);
-			if (/\b(static|const|uniform|return|struct)\b/.test(linePrefix)) { return match; }
-			if (/^\s+/.test(linePrefix)) { return match; }
-			return 'static ' + match;
+			return indent + 'static ' + match.slice(indent.length);
 		});
 	// Pass 2: handle  ;type  declarations on same line (e.g. float A,D,E;vec3 B,C;)
 	globals = fileScopeTokenOffsets(s);
@@ -1020,6 +1054,10 @@ function stepD3D9ForLoops(ctx)
 	significant.forEach(function (t, i)
 	{
 		if (t.type !== 'ident' || t.text !== 'for' || !significant[i + 1] || significant[i + 1].text !== '(') { return; }
+		// SM3's rolled-loop counter is limited to 255 iterations. Let the compiler unroll
+		// a larger, purely constant loop instead of giving it contradictory instructions.
+		var fixedLoop = /^for\s*\(\s*(?:int|uint|float)\s+(\w+)\s*=\s*0\s*;\s*\1\s*(<|<=)\s*(\d+)\s*;\s*(?:\1\s*\+\+|\+\+\s*\1)\s*\)/.exec(ctx.src.slice(t.start));
+		if (fixedLoop && +fixedLoop[3] + (fixedLoop[2] === '<=' ? 1 : 0) > 255) { return; }
 		// Respect explicit loop attributes rather than combining [loop] with [unroll].
 		if (i > 0 && significant[i - 1].text === ']') { return; }
 		insertions.push(t.start);
@@ -1756,11 +1794,11 @@ function rewriteMainBodyCode(src, messages, outVar, coordVar, fnName) {
 
 	// Move the opening { to its own line if it isn't already (Allman style).
 	src = src.replace(
-		new RegExp('(void\\s+' + fnEsc + '\\s*\\([^)]*\\))\\s*\\{'),
-		'$1\n{'
+		new RegExp('(void\\s+' + fnEsc + '\\s*\\([^)]*\\))([\\s«»⁰¹²³⁴⁵⁶⁷⁸⁹]*)\\{'),
+		function (_, signature, between) { return signature + between + (/\n$/.test(between) ? '' : '\n') + '{'; }
 	);
 
-	var sigRegex = new RegExp('void\\s+' + fnEsc + '\\s*\\([^)]*\\)\\s*\\n\\{');
+	var sigRegex = new RegExp('void\\s+' + fnEsc + '\\s*\\([^)]*\\)[\\s«»⁰¹²³⁴⁵⁶⁷⁸⁹]*\\{');
 	var match = sigRegex.exec(src);
 
 	if (!match) {

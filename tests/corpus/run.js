@@ -58,7 +58,7 @@ function compile(file, flags)
 		r = spawnSync(CLI, ['--dxbc', '--shader-model', '30', '-E', 'E__PS_ShadertoyMain', '-Fc', asmFile, '-Fo', path.join(outDir, 'dx9.bin'), file], { encoding: 'utf8' });
 		if (r.status !== 0) { return { stage: 'dx9', text: r.stdout + r.stderr }; }
 		const assembly = fs.readFileSync(asmFile, 'utf8');
-		const slots = /approximately (\d+) instruction slots used/.exec(assembly);
+		const slots = /approximately (\d+) instruction slots? used/.exec(assembly);
 		if (!slots || +slots[1] > flags.dx9Budget) { return { stage: 'dx9 budget', text: slots ? slots[1] + ' slots exceeds ' + flags.dx9Budget : 'missing instruction-slot count' }; }
 	}
 	return null;

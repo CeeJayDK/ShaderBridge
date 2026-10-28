@@ -137,5 +137,8 @@ const sharedSameLine = 'vec2 dims; int frame;\nvoid mainImage(out vec4 c, vec2 p
 const sharedSameLineOut = assemble([sharedSameLine, sharedSameLine]).out;
 check('separate declarations on one line are each deduplicated across passes', count(sharedSameLineOut, /static float2 dims;/g) === 1 && count(sharedSameLineOut, /static int frame;/g) === 1, sharedSameLineOut);
 
+const dependencyPasses = [{id:'bufA',channels:['bufA']},{id:'bufB',channels:['bufA']},{id:'bufC',channels:[]},{id:'cubemapA',channels:[]},{id:'image',channels:['bufB']}];
+check('only passes contributing to Image are selected, including transitive feedback inputs', porter.selectImageDependencies(dependencyPasses).map(p=>p.id).join(',') === 'bufA,bufB,image');
+
 console.log((total - bad) + '/' + total + ' common-tab tests OK');
 process.exit(bad ? 1 : 0);

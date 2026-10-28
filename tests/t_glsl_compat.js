@@ -141,6 +141,18 @@ r = port('', 'int k = int(fragCoord.x) % 3; vec3 c = vec3(0.); switch (k) { case
 check('through the pipeline', /default: c = float3\(0\., 0\., 1\.\); break;/.test(r.out), r.out);
 
 // ── function-like macros are typed from their bodies (3.0.19)
+const macroCollision = porter.transformGLSL('#define SCALE(x) ((x)*2.)\nvoid mainImage(out vec4 c, vec2 p) { float SCALE=1.; c=vec4(SCALE + SCALE(p.x)); }', [], 'Image').src;
+check('variables sharing function-macro names are renamed without changing macro calls', /ST_var_SCALE/.test(macroCollision) && /SCALE\(p.x\)/.test(macroCollision), macroCollision);
+const indentedGlobal = porter.transformGLSL('  vec2 value;\nvoid mainImage(out vec4 c, vec2 p) // header note\n{ value=p; c=vec4(value,0.,1.); }', [], 'Image').src;
+check('indented globals remain writable', /static float2 value;/.test(indentedGlobal), indentedGlobal);
+check('comments between the entry signature and its brace do not hide its body', /c = float4\(0.0, 0.0, 0.0, 1.0\)/.test(indentedGlobal), indentedGlobal);
+const repeatedMacro = porter.transformGLSL('#define MAKE(v) vec2(v)\n#define MAKE(v) vec2(v)\nvoid mainImage(out vec4 c, vec2 p) { c=vec4(MAKE(p.x),0.,1.); }', [], 'Image').src;
+check('identical repeated macro definitions can still be expanded safely', /float2\(p.x, p.x\)/.test(repeatedMacro), repeatedMacro);
+const rectangularMatrix = porter.transformGLSL('void mainImage(out vec4 c, vec2 p) { mat3x2 m=mat3x2(1.,2.,3.,4.,5.,6.); c=vec4(p*m,1.); }', [], 'Image').src;
+check('rectangular matrices preserve transposed storage and product dimensions', /float3x2 m/.test(rectangularMatrix) && /mul\(m, p\)/.test(rectangularMatrix), rectangularMatrix);
+const sampleUniforms = new Set(); porter.detectUniforms('float s=iSampleRate;', sampleUniforms);
+const sampleMessages = []; porter.analyzeShader('void mainImage(out vec4 c,vec2 p){c=vec4(iSampleRate);}', sampleMessages);
+check('iSampleRate is declared for visual shaders without rejecting them as sound programs', /iSampleRate = 44100.0/.test(porter.buildUniformBlock(sampleUniforms)) && !sampleMessages.some(m=>m.level==='error'));
 const entryMacro = porter.transformGLSL('vec2 size; int frame;\n#define ENTRY void mainImage(out vec4 c, vec2 p) { size=iResolution.xy; frame=iFrame;\nfloat gain (float x) { return x * 0.5; }\nENTRY c=vec4(gain(p.x)); }', [], 'Image').src;
 check('a macro can open the mainImage definition', /void mainImage_Image\(float2 p/.test(entryMacro) && /c = float4\(0.0, 0.0, 0.0, 1.0\)/.test(entryMacro), entryMacro);
 check('spaced function headers are not made static', !/static float gain/.test(entryMacro), entryMacro);
