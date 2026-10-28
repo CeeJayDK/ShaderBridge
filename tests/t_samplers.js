@@ -6,7 +6,7 @@ const porter = require('./load_porter.js')();
 function makePass(id, channels, names, opts)
 {
 	opts = opts || {};
-	const src = 'void mainImage(out vec4 fragColor, in vec2 fragCoord)\n{\n\tfragColor = texture(iChannel0, fragCoord / iResolution.xy);\n}';
+	const src = opts.source || 'void mainImage(out vec4 fragColor, in vec2 fragCoord)\n{\n\tfragColor = texture(iChannel0, fragCoord / iResolution.xy);\n}';
 	const messages = [];
 	const used = new Set();
 	porter.analyzeShader(src, messages);
@@ -64,6 +64,14 @@ check('renameIdentifiers: whole identifiers only',
 // 7. buffer channels no longer carry the old manual V-flip advice
 r = assemble([makePass('bufA', [], []), makePass('image', ['bufA'], [])]);
 check('buffer sampler: no stale "negate UV.y" advice', !/negate UV\.y/.test(r.out));
+
+const initialized = 'vec4 initial=texture(iChannel0,vec2(0.));\nvoid mainImage(out vec4 c,vec2 p) { c=initial; }';
+r = assemble([makePass('bufA',['texture'],['London'],{source:initialized}),makePass('image',['texture'],['Blue Noise'],{source:initialized})]);
+check('hoisted texture initializers follow sampler renames', /initial = tex2D\(iChannel0_Image,/.test(r.out));
+check('samplers used only by initializers are declared for each pass', /sampler2D iChannel0_Image\b/.test(r.out) && /sampler2D iChannel0\b/.test(r.out));
+const aliased = '#define INPUT iChannel0\nvoid mainImage(out vec4 c,vec2 p) { c=texture(INPUT,p); }';
+r = assemble([makePass('bufA',['texture'],['London'],{source:aliased}),makePass('image',['texture'],['Blue Noise'],{source:aliased})]);
+check('sampler aliases in macro bodies follow sampler renames', /#define INPUT iChannel0_Image/.test(r.out));
 
 console.log((total - bad) + '/' + total + ' sampler tests OK');
 process.exit(bad ? 1 : 0);

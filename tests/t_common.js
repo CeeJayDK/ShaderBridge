@@ -140,5 +140,28 @@ check('separate declarations on one line are each deduplicated across passes', c
 const dependencyPasses = [{id:'bufA',channels:['bufA']},{id:'bufB',channels:['bufA']},{id:'bufC',channels:[]},{id:'cubemapA',channels:[]},{id:'image',channels:['bufB']}];
 check('only passes contributing to Image are selected, including transitive feedback inputs', porter.selectImageDependencies(dependencyPasses).map(p=>p.id).join(',') === 'bufA,bufB,image');
 
+const macroMain = 'float gain(float x) { return x * GAIN; }\nfloat shade(float x) { return gain(x); }\nvoid mainImage(out vec4 c, vec2 p) { c=vec4(shade(p.x)); }';
+r = assemble(['#define GAIN 1.0\n'+macroMain, '#define GAIN 2.0\n'+macroMain]);
+check('identical function text with different macro values is not merged', /float gain_IMAGE\(/.test(r.out));
+check('callers of helpers with different macro values use the correct pass helper', /float shade_IMAGE\(float x\) \{ return gain_IMAGE\(x\); \}/.test(r.out) && /c=float4\(shade_IMAGE\(p.x\)/.test(r.out));
+r = assemble(['#define GAIN 1.0\n'+macroMain, '#define GAIN 1.0\n'+macroMain]);
+check('identical function text and macro environment can still be shared', count(r.out, /float gain\(/g) === 1 && !/gain_IMAGE/.test(r.out));
+const indentedCommon = '  float first;\n  float value;\n  float gain(float x) { return x; }\nvoid mainImage(out vec4 c, vec2 p) { value=gain(p.x); c=vec4(value); }';
+r = assemble([indentedCommon, indentedCommon]);
+check('indented Common globals are deduplicated', count(r.out, /static float value;/g) === 1);
+check('indented Common functions are deduplicated', count(r.out, /float gain\(/g) === 1);
+const braceComment = 'float gain(float x) { // } is only a comment\n return x;\n}\nvoid mainImage(out vec4 c, vec2 p) { c=vec4(gain(p.x)); }';
+r = assemble([braceComment, braceComment]);
+check('braces in comments do not truncate a function during deduplication', count(r.out, /return x;/g) === 1);
+
+const resolutionSource = 'vec2 extent=normalize(iChannelResolution[0].xy);\nvec2 dimensions() { return iChannelResolution[0].xy; }\nvoid mainImage(out vec4 c, vec2 p) { c=vec4(dimensions()+extent,0.,1.); }';
+const resolutionPasses = [makePass('bufA',resolutionSource),makePass('image',resolutionSource)];
+resolutionPasses[0].channels=['texture']; resolutionPasses[0].channelNames=['London'];
+resolutionPasses[1].channels=['texture']; resolutionPasses[1].channelNames=['Blue Noise'];
+const resolutionOut=porter.assembleFxFile(resolutionPasses,true,[],null);
+check('channel-resolution arrays are distinct for each pass', /float3 BufA_iChannelResolution\[4\]/.test(resolutionOut) && /float3 Image_iChannelResolution\[4\]/.test(resolutionOut));
+check('helpers reading different channel resolutions are not merged', /return Image_iChannelResolution\[0\].xy;/.test(resolutionOut) && /dimensions_IMAGE\(/.test(resolutionOut));
+check('hoisted initializers read the resolution for their own pass', /extent = normalize\(Image_iChannelResolution\[0\].xy\);/.test(resolutionOut));
+
 console.log((total - bad) + '/' + total + ' common-tab tests OK');
 process.exit(bad ? 1 : 0);

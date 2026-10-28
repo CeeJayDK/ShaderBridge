@@ -56,7 +56,8 @@ function buildUniformBlock(usedUniforms) {
 	if (usedUniforms.has('iTimeDelta')) {
 		sep();
 		lines.push('// iTimeDelta — time for last frame in seconds');
-		lines.push('uniform float iTimeDelta < source = "frametime"; >;');
+		lines.push('uniform float iTimeDeltaMS < source = "frametime"; >;');
+		lines.push('#define iTimeDelta (iTimeDeltaMS * 0.001)');
 	}
 	if (usedUniforms.has('iFrameRate')) {
 		sep();
@@ -376,7 +377,7 @@ function buildChannelResolution(channelConfig, channelNames, bufTexNames, usedCh
 	}
 
 	if (lines.length) { lines.push(''); }
-	lines.push('static const float3 iChannelResolution[4] =');
+	lines.push('static const float3 ' + (passPrefix || '') + 'iChannelResolution[4] =');
 	lines.push('{');
 	entries.forEach(function (e, i) { lines.push(e + (i < 3 ? ',' : '')); });
 	lines.push('};');
@@ -420,24 +421,25 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 	}
 
 	// ── Header ──
+	function commentText(value) { return String(value).replace(/\*\//g, '* /'); }
 	lines.push('/*');
-	lines.push('\tShaderBridge v' + PORTER_VERSION + ' — Shadertoy → ReShade FX Porter');
-	lines.push('\tCreated by CeeJay.dk & Claude Sonnet (Anthropic)');
 	if (shaderInfo) {
-		lines.push('');
-		if (shaderInfo.name)     { lines.push('\tShader  : ' + shaderInfo.name); }
-		if (shaderInfo.username) { lines.push('\tAuthor  : ' + shaderInfo.username); }
-		if (shaderInfo.url)      { lines.push('\tSource  : ' + shaderInfo.url); }
+		if (shaderInfo.name)     { lines.push('\tShader  : ' + commentText(shaderInfo.name)); }
+		if (shaderInfo.username) { lines.push('\tAuthor  : ' + commentText(shaderInfo.username)); }
+		if (shaderInfo.url)      { lines.push('\tSource  : ' + commentText(shaderInfo.url)); }
 		if (shaderInfo.description && shaderInfo.description.trim()) {
 			// Emit description — indent each line, cap at ~120 chars per line for readability
 			var descLines = shaderInfo.description.trim().split('\n');
 			lines.push('\tDescription:');
-			descLines.forEach(function (dl) { lines.push('\t  ' + dl); });
+			descLines.forEach(function (dl) { lines.push('\t  ' + commentText(dl)); });
 		}
 	}
 	else {
 		lines.push('\tOriginal shader copyright belongs to its respective author.');
 	}
+	lines.push('');
+	lines.push('\tPorted using ShaderBridge v' + PORTER_VERSION + ' — Shadertoy → ReShade FX Porter');
+	lines.push('\tCreated by CeeJay.dk & Claude Sonnet');
 	lines.push('*/');
 	lines.push('');
 
@@ -558,7 +560,7 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 			.replace(/\/\/[^\n]*/g, function (m) { return ' '.repeat(m.length); });
 
 		// Match: return-type identifier ( params ) {
-		var re = /^((?:[\w:*]+\s+)+)([\w]+)\s*\(([^)]*)\)\s*\n?\s*\{/gm;
+		var re = /^[ \t]*((?:[\w:*]+\s+)+)([\w]+)\s*\(([^)]*)\)\s*\n?\s*\{/gm;
 		var m;
 		while ((m = re.exec(stripped)) !== null) {
 			var retType = m[1].trim();
@@ -570,13 +572,13 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 			// Skip struct definitions
 			if (retType === 'struct') { continue; }
 
-			// Walk forward in the ORIGINAL src (not stripped) to find the matching closing brace
-			var braceOpen = src.indexOf('{', m.index + m[0].length - 1);
+			// The comment-masked copy has the same offsets and ignores braces in comments.
+			var braceOpen = stripped.indexOf('{', m.index + m[0].length - 1);
 			var depth = 1;
 			var k = braceOpen + 1;
 			while (k < src.length && depth > 0) {
-				if (src[k] === '{') { depth++; }
-				else if (src[k] === '}') { depth--; }
+				if (stripped[k] === '{') { depth++; }
+				else if (stripped[k] === '}') { depth--; }
 				k++;
 			}
 
@@ -603,13 +605,33 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 	}
 
 	function deduplicatePassFunctions(src, seen, passTag, messages, passLabel) {
+		function keysFor(source)
+		{
+			var names = Object.create(null), directives = [];
+			tokenizeSource(source).forEach(function (t)
+			{
+				if (t.type !== 'preproc') { return; }
+				var macro = /^#\s*(?:define|undef)\s+(\w+)/.exec(t.text);
+				if (macro) { names[macro[1]] = true; }
+				directives.push(normaliseFunctionText(t.text));
+			});
+			return function (fn)
+			{
+				var text = normaliseFunctionText(source.slice(fn.start, fn.end));
+				// Equal text can have different meanings in separate Shadertoy programs.
+				// Conservatively include the pass's directives when a helper uses its macros.
+				var usesMacro = (text.match(/\b[A-Za-z_]\w*\b/g) || []).some(function (word) { return names[word]; });
+				return text + (usesMacro ? '\n' + directives.join('\n') : '');
+			};
+		}
 		var renames = {};
 		for (var round = 0; round < 100 && passTag; round++) {
 			var renameNow = {};
+			var functionKey = keysFor(src);
 			extractTopLevelFunctions(src).forEach(function (fn) {
 				var name = fn.sig.slice(0, fn.sig.indexOf('('));
 				if (renames[name] !== undefined || renameNow[name] !== undefined) { return; }
-				if (seen[fn.sig] !== undefined && seen[fn.sig] !== normaliseFunctionText(src.slice(fn.start, fn.end))) { renameNow[name] = name + passTag; }
+				if (seen[fn.sig] !== undefined && seen[fn.sig] !== functionKey(fn)) { renameNow[name] = name + passTag; }
 			});
 			var names = Object.keys(renameNow);
 			if (names.length === 0) { break; }
@@ -621,10 +643,11 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 		}
 
 		var fns = extractTopLevelFunctions(src);
+		var functionKey = keysFor(src);
 		var removals = []; // { start, end } sorted descending
 		var newSigs = [];
 		fns.forEach(function (fn) {
-			var text = normaliseFunctionText(src.slice(fn.start, fn.end));
+			var text = functionKey(fn);
 			if (seen[fn.sig] !== undefined) {
 				removals.push({ start: fn.start, end: fn.end });
 			}
@@ -733,7 +756,7 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 	function deduplicatePassGlobals(src, seenGlobals, messages, passLabel) {
 		var removed = 0;
 		var newGlobals = {};
-		var result = src.replace(/^(static[ ]+(?:const[ ]+)?(?:float[234x]*|int[234]?|uint[234]?|bool)[ ]+(\w+)[ ]*(?:=[^;\n]*)?;)[ \t]*(?:\/\/[^\n]*)?(?:\n|$)/gm,
+		var result = src.replace(/^[ \t]*(static[ ]+(?:const[ ]+)?(?:float[234x]*|int[234]?|uint[234]?|bool)[ ]+(\w+)[ ]*(?:=[^;\n]*)?;)[ \t]*(?:\/\/[^\n]*)?(?:\n|$)/gm,
 			function (match, decl, name) {
 				var key = decl.replace(/\s+/g, ' ').trim();
 				// Only compare against EARLIER passes. Within one pass, repeated declarations are
@@ -769,7 +792,7 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 			if (seenStructs[name] !== undefined && seenStructs[name] !== key && renames[name] === undefined) { note('struct', name); }
 			return match;
 		});
-		src.replace(/^(static[ ]+(?:const[ ]+)?(?:float[234x]*|int[234]?|uint[234]?|bool)[ ]+(\w+)[ ]*(?:=[^;\n]*)?;)[ \t]*(?:\/\/[^\n]*)?(?:\n|$)/gm,
+		src.replace(/^[ \t]*(static[ ]+(?:const[ ]+)?(?:float[234x]*|int[234]?|uint[234]?|bool)[ ]+(\w+)[ ]*(?:=[^;\n]*)?;)[ \t]*(?:\/\/[^\n]*)?(?:\n|$)/gm,
 			function (match, decl, name) {
 				var key = decl.replace(/\s+/g, ' ').trim();
 				if (seenGlobals[name] !== undefined && seenGlobals[name] !== key && renames[name] === undefined) { note('global', name); }
@@ -815,12 +838,20 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 		Object.keys(bufTexNames).forEach(function (k) { extBufTexNames[k] = bufTexNames[k]; });
 		Object.keys(bufPrevTexNames).forEach(function (k) { extBufTexNames[k + '_prev'] = bufPrevTexNames[k]; });
 
-		var usedChannels = detectChannelUse(p.src);
+		// Keep hoisted initializers with their pass during resource discovery, Vflip rewriting,
+		// and namespace isolation. Otherwise a texture read used only here loses its sampler.
+		var initName = '', passSrc = p.src;
+		if (p.globalInits && p.globalInits.length)
+		{
+			initName = 'ST_InitGlobals_' + label;
+			while (transformedPasses.some(function (candidate) { return candidate.src.indexOf(initName) >= 0; })) { initName += '_'; }
+			passSrc += '\nvoid ' + initName + '()\n{\n\t' + p.globalInits.join('\n\t') + '\n}\n';
+		}
+		var usedChannels = detectChannelUse(passSrc);
 		var channelAttribs = { filters: p.filters || [], wraps: p.wraps || [], vflips: p.vflips || [] };
 
 		// Texture and backbuffer channels can have V flipped at their sample sites. Each gets a
 		// preprocessor definition (shown in ReShade's UI) whose default is the Vflip setting.
-		var passSrc = p.src;
 		var flipHelperLines = [];
 		var samplerFlags = {};
 		var passTag = transformedPasses.length > 1 ? '_' + (isBuf ? bufLabels[p.id] : 'Image').toUpperCase().replace(/[^A-Z0-9]/g, '') : '';
@@ -845,11 +876,10 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 			if (flipResult.helpers.fetch && !emittedFlipHelpers.fetch) { emittedFlipHelpers.fetch = true; flipHelperLines.push('int2 ST_flipFetch(int2 coord, int2 size, bool flip)', '{', '\treturn int2(coord.x, flip ? size.y - 1 - coord.y : coord.y);', '}', ''); }
 			if (flipHelperLines.length) { flipHelperLines.unshift('// V flip for textures with a Vflip option: Shadertoy has v = 0 at the bottom row of the image, ReShade at the top'); }
 		}
-		var passRenames = {};
+		var resourceRenames = {};
 		var samplerBlock = declarePassResources(
 			buildSamplerBlock(effectiveChannels, usedChannels, extBufTexNames, messages, channelAttribs, p.channelNames || []),
-			declaredResources, (isBuf ? bufLabels[p.id] : 'Image'), passRenames, messages, (isBuf ? bufLabels[p.id] : 'Image')).trim();
-		if (Object.keys(passRenames).length) { passSrc = renameIdentifiers(passSrc, passRenames); }
+			declaredResources, (isBuf ? bufLabels[p.id] : 'Image'), resourceRenames, messages, (isBuf ? bufLabels[p.id] : 'Image')).trim();
 
 		if (samplerBlock) {
 			lines.push('// ── Samplers — ' + (isBuf ? bufLabels[p.id] : 'Image') + ' ──');
@@ -860,11 +890,13 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 		// iChannelResolution — emit per-pass with correct dimensions when used
 		if (p.usedUniforms && p.usedUniforms.has('iChannelResolution')) {
 			var passPrefix = transformedPasses.length > 1 ? (isBuf ? bufLabels[p.id] : 'Image') + '_' : '';
+			if (passPrefix) { resourceRenames.iChannelResolution = passPrefix + 'iChannelResolution'; }
 			var chanResBlock = buildChannelResolution(p.channels, p.channelNames || [], bufTexNames, usedChannels, passPrefix);
 			lines.push('// iChannelResolution — per-channel dimensions');
 			lines.push(chanResBlock);
 			lines.push('');
 		}
+		if (Object.keys(resourceRenames).length) { passSrc = renameNamesEverywhere(passSrc, resourceRenames); }
 
 		flipHelperLines.forEach(function (l) { lines.push(l); });
 		lines.push('// ── Shader body' + (transformedPasses.length > 1 ? ' — ' + (isBuf ? bufLabels[p.id] : 'Image') : '') + ' ──');
@@ -873,9 +905,6 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 		var dedupedSrc = deduplicatePassStructs(globalRename.src, declaredStructs, messages, passLabel);
 		var functionResult = deduplicatePassFunctions(dedupedSrc, declaredFunctions, passTag, messages, passLabel);
 		dedupedSrc = functionResult.src;
-		var passRenames = {};
-		[globalRename.renames, functionResult.renames].forEach(function (map) { Object.keys(map).forEach(function (k) { passRenames[k] = map[k]; }); });
-		var passInits = (p.globalInits || []).map(function (init) { return Object.keys(passRenames).length ? renameIdentifiers(init, passRenames) : init; });
 		dedupedSrc = deduplicatePassGlobals(dedupedSrc, declaredGlobals, messages, passLabel);
 		lines.push(dedupedSrc);
 		lines.push('');
@@ -890,7 +919,7 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 			lines.push('{');
 			lines.push('\tfloat2 ' + coordVar + ' = float2(vpos.x, ST_FLIP_Y ? BUFFER_HEIGHT - vpos.y : vpos.y);');
 			if (/\bST_FragCoord\b/.test(p.src)) { lines.push('\tST_FragCoord = float4(' + coordVar + ', 0.0, 1.0);'); }
-			passInits.forEach(function (init) { lines.push('\t' + init); });
+			if (initName) { lines.push('\t' + initName + '();'); }
 			lines.push('\t' + mainImgName + '(' + coordVar + ', output);');
 			lines.push('}');
 		}
@@ -898,7 +927,7 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 			lines.push('void ' + psName + '(float4 vpos : SV_Position, float2 texcoord : TEXCOORD, out float4 output : SV_Target)');
 			lines.push('{');
 			if (/\bST_FragCoord\b/.test(p.src)) { lines.push('\tST_FragCoord = float4(vpos.xy, 0.0, 1.0);'); }
-			passInits.forEach(function (init) { lines.push('\t' + init); });
+			if (initName) { lines.push('\t' + initName + '();'); }
 			lines.push('\t' + mainImgName + '(vpos.xy, output);');
 			lines.push('}');
 		}

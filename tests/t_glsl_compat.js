@@ -141,6 +141,9 @@ r = port('', 'int k = int(fragCoord.x) % 3; vec3 c = vec3(0.); switch (k) { case
 check('through the pipeline', /default: c = float3\(0\., 0\., 1\.\); break;/.test(r.out), r.out);
 
 // ── function-like macros are typed from their bodies (3.0.19)
+const lateMacro = porter.transformGLSL('vec2 MAKE(float x) { return vec2(x,x+1.); }\nvec2 before(float x) { return MAKE(x); }\n#define MAKE(x) vec2(x)\nvoid mainImage(out vec4 c, vec2 p) { c=vec4(before(p.x),MAKE(p.y)); }', [], 'Image').src;
+check('a later macro definition does not replace an earlier function call', /return MAKE\(x\);/.test(lateMacro), lateMacro);
+check('the same macro expands normally after its definition', /float4\(before\(p.x\),float2\(p.y, p.y\)\)/.test(lateMacro), lateMacro);
 const macroCollision = porter.transformGLSL('#define SCALE(x) ((x)*2.)\nvoid mainImage(out vec4 c, vec2 p) { float SCALE=1.; c=vec4(SCALE + SCALE(p.x)); }', [], 'Image').src;
 check('variables sharing function-macro names are renamed without changing macro calls', /ST_var_SCALE/.test(macroCollision) && /SCALE\(p.x\)/.test(macroCollision), macroCollision);
 const indentedGlobal = porter.transformGLSL('  vec2 value;\nvoid mainImage(out vec4 c, vec2 p) // header note\n{ value=p; c=vec4(value,0.,1.); }', [], 'Image').src;

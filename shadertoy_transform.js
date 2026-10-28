@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.51';
+var PORTER_VERSION = '3.0.52';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -516,9 +516,10 @@ function stepCompatibilityMacros(ctx)
 		}
 	});
 	Object.keys(macros).forEach(function (name) { if (conflicts[name]) { delete macros[name]; } });
+	var availableMacros = Object.create(null);
 	function needsExpansion(name, seen)
 	{
-		var macro = macros[name];
+		var macro = availableMacros[name];
 		if (!macro || seen.indexOf(name) >= 0 || seen.length > 24) { return false; }
 		if (/\bmainImage\s*\(/.test(macro.body)) { return true; }
 		if (/[{};]/.test(macro.body)) { return true; }
@@ -537,7 +538,7 @@ function stepCompatibilityMacros(ctx)
 		var parts = tokenizeSource(text), out = '';
 		for (var i = 0; i < parts.length; i++)
 		{
-			var t = parts[i], macro = t.type === 'ident' && macros[t.text];
+			var t = parts[i], macro = t.type === 'ident' && availableMacros[t.text];
 			if (!macro || disabled.indexOf(t.text) >= 0 || !needsExpansion(t.text, [])) { out += t.text; continue; }
 			if (++expansionCount > 10000) { out += t.text; continue; }
 			var args = [], end = i;
@@ -573,7 +574,20 @@ function stepCompatibilityMacros(ctx)
 		}
 		return out;
 	}
-	ctx.src = expand(ctx.src, []);
+	// A definition applies only after its directive. In particular, a later function macro
+	// must not rewrite a real function declaration or call earlier in the source.
+	var output = '', pending = '', level = 0;
+	tokens.forEach(function (t)
+	{
+		if (t.type !== 'preproc') { pending += t.text; return; }
+		output += expand(pending, []) + t.text;
+		pending = '';
+		var branch = /^#\s*(if|ifdef|ifndef|endif)\b/.exec(t.text);
+		if (branch) { level += branch[1] === 'endif' ? -1 : 1; }
+		var definition = /^#\s*define\s+([A-Za-z_]\w*)/.exec(t.text);
+		if (definition && level === 0 && macros[definition[1]]) { availableMacros[definition[1]] = macros[definition[1]]; }
+	});
+	ctx.src = output + expand(pending, []);
 }
 
 function fileScopeTokenOffsets(src)

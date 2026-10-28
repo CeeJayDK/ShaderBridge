@@ -22,6 +22,14 @@ function pass(id, channel)
 }
 const build = (passes) => porter.assembleFxFile(passes, true, [], { id: 'x', name: 'x', username: 'u', description: '' });
 
+const credited = porter.assembleFxFile([pass('image', null)], true, [], {name:'Example shader',username:'Original artist',description:'Example description',url:'https://example.test/shader'});
+check('original shader and author precede the porter credit', credited.indexOf('Shader  : Example shader') < credited.indexOf('Ported using ShaderBridge v') && credited.indexOf('Author  : Original artist') < credited.indexOf('Ported using ShaderBridge v'));
+check('porter credit has no vendor suffix', credited.includes('Created by CeeJay.dk & Claude Sonnet') && !credited.includes('(Anthropic)'));
+const escaped = porter.assembleFxFile([pass('image', null)], true, [], {name:'Example */ title',username:'Artist */ name',url:'https://example.test/*/',description:'A description with */ inside.'});
+check('metadata cannot close the generated header comment early', count(escaped.slice(0, escaped.indexOf('// ── Intrinsic remaps')), /\*\//g) === 1);
+const deltaBlock = porter.buildUniformBlock(new Set(['iTimeDelta']));
+check('frame duration is converted from ReShade milliseconds to Shadertoy seconds', /uniform float iTimeDeltaMS < source = "frametime"; >;/.test(deltaBlock) && /#define iTimeDelta \(iTimeDeltaMS \* 0\.001\)/.test(deltaBlock));
+
 // single file, no screen channel
 let out = build([pass('image', null)]);
 check('single file: no include of ReShade.fxh', !/#include\s+"ReShade\.fxh"/.test(out));

@@ -14,17 +14,18 @@ Run with Node (no dependencies):
 | `t_flip.js` | the `ST_FLIP_Y` / `ST_VFLIP_*` options, the mouse, no `iResolution` dependency (33) |
 | `t_vflip.js` | V flip at texture sample sites, with the flag passed through sampler parameters, including the offset overloads (40) |
 | `t_texelfetch.js` | `texelFetch` / `textureSize`, and row-mirrored fetches from Vflip textures (20) |
-| `t_samplers.js` | sampler and texture names clashing across passes (15) |
-| `t_common.js` | Common declarations are shared or renamed across passes as needed; only passes contributing to Image are selected (43) |
-| `t_glsl_compat.js` | reserved words, `precision`, static globals, array and matrix constructors, comparison functions, switch, macro typing and name collisions, rectangular matrix expressions, `inverse` / `outerProduct` / `matrixCompMult`, texture lookups, visual sample-rate declarations, `gl_FragCoord`, conditional fallback returns, file-scope detection, and DX9 constant shifts and low-bit masks (291) |
+| `t_samplers.js` | sampler and texture names clashing across passes, including macro aliases and hoisted initializers (18) |
+| `t_common.js` | Common declarations are shared or renamed across passes as needed; macro environments, channel resolutions, indentation, and comment braces preserve each pass's meaning; only passes contributing to Image are selected (52) |
+| `t_glsl_compat.js` | reserved words, `precision`, static globals, array and matrix constructors, comparison functions, switch, macro typing, definition order and name collisions, rectangular matrix expressions, `inverse` / `outerProduct` / `matrixCompMult`, texture lookups, visual sample-rate declarations, `gl_FragCoord`, conditional fallback returns, file-scope detection, and DX9 constant shifts and low-bit masks (293) |
 | `t_functions.js` | ReShade FX has no forward declarations: declarations are removed and callers moved after the functions they call (21) |
 | `t_pipeline.js` | the transform is a list of named steps: the order that matters is declared and checked, and every step proves on its own example that it does something (105) |
 | `t_loops.js` | DX9 for-loop hints, large constant loops, nested and unbraced bodies, explicit attributes, and function reordering (13) |
 | `t_frames.js` | an effect-local frame counter starts at zero after loading, uses separate read/write textures, and runs before shader passes (5) |
 | `t_cubemap.js` | the cubemap helper agrees with the OpenGL cube map table, face order and orientation (28) |
 | `t_contrast.js` | the page is readable: every text colour has enough contrast, and the critical styles agree with the stylesheet (70) |
-| `t_standalone.js` | the .fx includes nothing: it declares its own vertex shader and screen texture and carries its own helpers (16) |
-| `corpus/run.js` | 157 small GLSL idioms, each ported and compiled with the real ReShade compiler; synthetic DX9 loops and bit operations also check the instruction-slot budget on Windows |
+| `t_standalone.js` | the .fx includes nothing; author attribution precedes porter credits, metadata stays inside comments, and frame duration uses seconds (20) |
+| `corpus/run.js` | 158 small GLSL idioms, each ported and compiled with the real ReShade compiler; synthetic DX9 loops and bit operations also check the instruction-slot budget on Windows |
+| `t_assembly_compile.js` | 8 complete synthetic effects, including multipass macro isolation, resource aliases, hoisted texture reads, channel resolutions, and metadata; every entry point compiles for DX11 and, on Windows, DX9 |
 | `roundtrip.js` | the lexer must reproduce every shader source exactly |
 
 ## Environment
@@ -32,7 +33,7 @@ Run with Node (no dependencies):
 - `SB_DIR` the porter folder (default: the folder above `tests/`, i.e. the repo root).
 - `SHADER_JSON_DIR` Shadertoy `.json` exports for `roundtrip.js` (default `./shaders`, which holds three small synthetic
   multipass fixtures; real exports are not included because they carry their authors' licences). Skipped if empty.
-- `RESHADEFX_CLI` path to `reshadefx_cli_fixed` from the ReShade-Testing-Initiative. Without it `corpus/run.js` is skipped.
+- `RESHADEFX_CLI` path to `reshadefx_cli_fixed` from the ReShade-Testing-Initiative. Without it the corpus and complete-effect compiler suites are skipped.
   The corpus is compiled with no include path, which also proves that a single .fx does not need ReShade.fxh.
 
 ## The corpus
