@@ -133,5 +133,9 @@ const macroFetchOut = porter.assembleFxFile([feedbackPass, displayPass], true, [
 check('macro-hidden buffer reads get different samplers for feedback and display', /iChannel0_Image/.test(macroFetchOut) && /tex_BufA_Prev/.test(macroFetchOut), macroFetchOut);
 check('helpers whose macro-hidden samplers differ are not merged across passes', /readState_IMAGE\(/.test(macroFetchOut) && count(macroFetchOut, /float4 readState\w*\(/g) === 2, macroFetchOut);
 
+const sharedSameLine = 'vec2 dims; int frame;\nvoid mainImage(out vec4 c, vec2 p) { dims=iResolution.xy; frame=iFrame; c=vec4(dims, float(frame), 1.); }';
+const sharedSameLineOut = assemble([sharedSameLine, sharedSameLine]).out;
+check('separate declarations on one line are each deduplicated across passes', count(sharedSameLineOut, /static float2 dims;/g) === 1 && count(sharedSameLineOut, /static int frame;/g) === 1, sharedSameLineOut);
+
 console.log((total - bad) + '/' + total + ' common-tab tests OK');
 process.exit(bad ? 1 : 0);

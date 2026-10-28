@@ -141,6 +141,11 @@ r = port('', 'int k = int(fragCoord.x) % 3; vec3 c = vec3(0.); switch (k) { case
 check('through the pipeline', /default: c = float3\(0\., 0\., 1\.\); break;/.test(r.out), r.out);
 
 // ── function-like macros are typed from their bodies (3.0.19)
+const entryMacro = porter.transformGLSL('vec2 size; int frame;\n#define ENTRY void mainImage(out vec4 c, vec2 p) { size=iResolution.xy; frame=iFrame;\nfloat gain (float x) { return x * 0.5; }\nENTRY c=vec4(gain(p.x)); }', [], 'Image').src;
+check('a macro can open the mainImage definition', /void mainImage_Image\(float2 p/.test(entryMacro) && /c = float4\(0.0, 0.0, 0.0, 1.0\)/.test(entryMacro), entryMacro);
+check('spaced function headers are not made static', !/static float gain/.test(entryMacro), entryMacro);
+check('same-line globals separated by spaces are made static', /static float2 size;\s*static int frame;/.test(entryMacro), entryMacro);
+check('entry macro definitions stay intact on one preprocessor line', /#define ENTRY void mainImage\(out float4 c, float2 p\) \{/.test(entryMacro), entryMacro);
 const statementMacro = porter.transformGLSL('#define ROTATE(v,a) { float c=cos(a), s=sin(a); v *= mat2(c,-s,s,c); }\nvoid mainImage(out vec4 c, vec2 p) { ROTATE(p, 0.5); c = vec4(p, 0., 1.); }', [], 'Image').src;
 check('statement macros expose matrix assignments to the typed rewriter', /p = mul\(float2x2\(c,-s,s,c\), p\)/.test(statementMacro), statementMacro);
 const highUint = porter.transformGLSL('#define LIMIT float(0xffffffffU)\nvoid mainImage(out vec4 c, vec2 p) { c = vec4(float(0x80000000U) / LIMIT); }', [], 'Image').src;

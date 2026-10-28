@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.48';
+var PORTER_VERSION = '3.0.49';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -422,6 +422,8 @@ function stepSplitGlobalDeclarators(ctx)
 	var messages = ctx.messages;
 	// several variables in one global declaration: one declaration per variable
 	s = splitGlobalDeclarators(s, messages);
+	var globals = fileScopeTokenOffsets(s);
+	s = s.replace(/;[ \t]*(?=\S)/g, function (match, offset) { return globals[offset] ? ';\n' : match; });
 	ctx.src = s;
 }
 
@@ -481,6 +483,7 @@ function stepCompatibilityMacros(ctx)
 	{
 		var macro = macros[name];
 		if (!macro || seen.indexOf(name) >= 0 || seen.length > 24) { return false; }
+		if (/\bmainImage\s*\(/.test(macro.body)) { return true; }
 		var bodyTokens = tokenizeSource(macro.body).filter(function (t) { return t.type !== 'ws'; });
 		return bodyTokens.some(function (t, i)
 		{
@@ -588,6 +591,7 @@ function stepStaticGlobals(ctx)
 	s = s.replace(new RegExp('^(((?:' + globalTypes + ')\\s+))([a-zA-Z_]\\w*)\\s*(?=[,;=\\s\\[])', 'gm'),
 		function (match, typeAndSpace, type, name, offset, str) {
 			if (!globals[offset]) { return match; }
+			if (/^\s*\(/.test(str.slice(offset + match.length))) { return match; }
 			var lineStart = str.lastIndexOf('\n', offset) + 1;
 			var linePrefix = str.slice(lineStart, offset);
 			if (/\b(static|const|uniform|return|struct)\b/.test(linePrefix)) { return match; }
@@ -596,12 +600,13 @@ function stepStaticGlobals(ctx)
 		});
 	// Pass 2: handle  ;type  declarations on same line (e.g. float A,D,E;vec3 B,C;)
 	globals = fileScopeTokenOffsets(s);
-	s = s.replace(/;(float[234x]*|int[234]?|uint[234]?|bool)(\s+)([a-zA-Z_]\w*)\s*(?=[,;=\s])/gm,
-		function (match, type, space, name, offset, str) {
+	s = s.replace(/;([ \t]*)(float[234x]*|int[234]?|uint[234]?|bool)(\s+)([a-zA-Z_]\w*)\s*(?=[,;=\s])/gm,
+		function (match, indent, type, space, name, offset, str) {
 			if (!globals[offset]) { return match; }
+			if (/^\s*\(/.test(str.slice(offset + match.length))) { return match; }
 			var lineStart = str.lastIndexOf('\n', offset) + 1;
 			if (/^\s+/.test(str.slice(lineStart, offset + 1))) { return match; } // indented
-			return ';static ' + type + space + name;
+			return ';' + indent + 'static ' + type + space + name;
 		});
 	// ── iTime is kept as-is; assemble.js defines it directly ─────────────────
 	ctx.src = s;
@@ -822,6 +827,19 @@ function stepClampToSaturate(ctx)
 	ctx.src = s;
 }
 
+function rewriteOutsideDirectives(src, rewrite)
+{
+	var directives = [], marker = '§SBPP';
+	while (src.indexOf(marker) >= 0) { marker += '_'; }
+	var masked = tokenizeSource(src).map(function (t)
+	{
+		if (t.type !== 'preproc') { return t.text; }
+		directives.push(t.text);
+		return marker + (directives.length - 1) + '§';
+	}).join('');
+	return rewrite(masked).replace(new RegExp(marker + '(\\d+)§', 'g'), function (_, index) { return directives[+index]; });
+}
+
 function stepMainImageSignature(ctx)
 {
 	var s = ctx.src;
@@ -831,14 +849,14 @@ function stepMainImageSignature(ctx)
 	// ── mainImage signature → HLSL entry point ──────────────────────────────
 	// Capture output and coord variable names for use in the PS entry wrapper.
 	// In multipass, rename to avoid collision between passes.
-	s = s.replace(
+	s = rewriteOutsideDirectives(s, function (code) { return code.replace(
 		/void\s+mainImage\s*\(\s*out\s+\w+4\s+(\w+)\s*,\s*(?:in\s+)?\w+2\s+(\w+)\s*\)/g,
 		function (_, outVar, coordVar) {
 			mainImageOutVar = outVar;
 			mainImageCoordVar = coordVar;
 			return 'void ' + mainImageName + '(float2 ' + coordVar + ', out float4 ' + outVar + ' : SV_Target)';
 		}
-	);
+	); });
 	ctx.outVar = mainImageOutVar;
 	ctx.coordVar = mainImageCoordVar;
 	ctx.src = s;
@@ -1724,7 +1742,12 @@ function rewriteTwoArgAtan(src) {
 //   • Append  return fragColor;  before the closing brace
 // ─────────────────────────────────────────────────────────────────────────────
 
-function rewriteMainBody(src, messages, outVar, coordVar, fnName) {
+function rewriteMainBody(src, messages, outVar, coordVar, fnName)
+{
+	return rewriteOutsideDirectives(src, function (code) { return rewriteMainBodyCode(code, messages, outVar, coordVar, fnName); });
+}
+
+function rewriteMainBodyCode(src, messages, outVar, coordVar, fnName) {
 	if (!outVar) { outVar = 'fragColor'; }
 	if (!coordVar) { coordVar = 'fragCoord'; }
 	if (!fnName) { fnName = 'mainImage'; }

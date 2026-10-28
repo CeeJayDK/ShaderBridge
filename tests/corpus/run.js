@@ -24,7 +24,7 @@ const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shaderbridge-corpus-'));
 
 function port(id, helpers, body, flags)
 {
-	const src = helpers + 'void mainImage(out vec4 fragColor, in vec2 fragCoord)\n{\n\t' + body.replace(/\n/g, '\n\t') + '\n}\n';
+	const src = flags && flags.rawSource ? helpers + body : helpers + 'void mainImage(out vec4 fragColor, in vec2 fragCoord)\n{\n\t' + body.replace(/\n/g, '\n\t') + '\n}\n';
 	const messages = [];
 	const used = new Set();
 	porter.analyzeShader(src, messages);
