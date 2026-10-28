@@ -131,6 +131,7 @@ check('two passes do not share anything', names2 === 'mainImage_BufA mainImage',
 // (or, for a step that only passes on information, changes the pass). A step that is skipped or never
 // exercised is found here.
 const EXAMPLES = {
+	unsignedFloatConstants: 'void mainImage(out vec4 c, vec2 p) { c = vec4(float(0xffffffffU)); }',
 	compatibilityMacros: '#define UV int2(iResolution)\nvoid mainImage(out vec4 c, vec2 p) { c = vec4(vec2(UV), 0., 1.); }',
 	d3d9BitOperations: 'void mainImage(out vec4 c, vec2 p) { int k = int(p.x); c = vec4(float((k >> 1) & 1)); }',
 	d3d9ForLoops: 'void mainImage(out vec4 c, vec2 p) { for (int k = 0; k < 4; k++) { p *= 0.5; } c = vec4(p, 0., 1.); }',

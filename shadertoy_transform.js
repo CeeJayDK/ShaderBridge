@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.46';
+var PORTER_VERSION = '3.0.47';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -423,6 +423,35 @@ function stepSplitGlobalDeclarators(ctx)
 	// several variables in one global declaration: one declaration per variable
 	s = splitGlobalDeclarators(s, messages);
 	ctx.src = s;
+}
+
+function stepUnsignedFloatConstants(ctx)
+{
+	function rewrite(text)
+	{
+		var tokens = tokenizeSource(text);
+		var strings = tokens.filter(function (t) { return t.type === 'string' || t.type === 'preproc'; });
+		var quoted = /"(?:\\[\s\S]|[^"\\])*"/g, quotedMatch;
+		while ((quotedMatch = quoted.exec(text))) { strings.push({ start: quotedMatch.index, end: quoted.lastIndex }); }
+		text = text.replace(/\b(float[234]?(?:x[234])?)\s*\(\s*(0[xX][\da-fA-F]+|\d+)[uU]\s*\)/g, function (match, type, digits, offset)
+		{
+			if (strings.some(function (t) { return offset >= t.start && offset < t.end; })) { return match; }
+			var value = Number(digits);
+			// ReShade's constant folder treats high uint values as signed when casting to float.
+			return value > 2147483647 && value <= 4294967295 ? type + '(' + value + '.0)' : match;
+		});
+		return text;
+	}
+	ctx.src = tokenizeSource(ctx.src).map(function (t)
+	{
+		if (t.type === 'preproc')
+		{
+			var m = /^(#\s*define\s+\w+(?:\([^)]*\))?\s+)([\s\S]*)$/.exec(t.text);
+			return m ? m[1] + rewrite(m[2]) : t.text;
+		}
+		return t.text;
+	}).join('');
+	ctx.src = rewrite(ctx.src);
 }
 
 function stepCompatibilityMacros(ctx)
@@ -1045,6 +1074,7 @@ var TRANSFORM_STEPS = [
 	},
 	{ name: 'intrinsicNames', run: stepIntrinsicNames },
 	{ name: 'reservedIdentifiers', run: stepReservedIdentifiers },
+	{ name: 'unsignedFloatConstants', run: stepUnsignedFloatConstants, after: ['typeNames'], why: 'floating-point constructor names must already be in HLSL form' },
 	{ name: 'compatibilityMacros', run: stepCompatibilityMacros, after: ['typeNames', 'reservedIdentifiers'], why: 'macro bodies must use the same type and identifier names as the expressions they expand into' },
 	{ name: 'splitGlobalDeclarators', run: stepSplitGlobalDeclarators, after: ['extractComments'], why: 'it moves comment placeholders and must see them rather than the comments' },
 	{

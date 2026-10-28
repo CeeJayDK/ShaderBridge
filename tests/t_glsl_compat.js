@@ -141,6 +141,11 @@ r = port('', 'int k = int(fragCoord.x) % 3; vec3 c = vec3(0.); switch (k) { case
 check('through the pipeline', /default: c = float3\(0\., 0\., 1\.\); break;/.test(r.out), r.out);
 
 // ── function-like macros are typed from their bodies (3.0.19)
+const highUint = porter.transformGLSL('#define LIMIT float(0xffffffffU)\nvoid mainImage(out vec4 c, vec2 p) { c = vec4(float(0x80000000U) / LIMIT); }', [], 'Image').src;
+check('high unsigned constants become floating-point literals in casts and macros', /float\(4294967295.0\)/.test(highUint) && /float\(2147483648.0\)/.test(highUint), highUint);
+const untouchedUint = {src:'uint value=0xffffffffU; float signedValue=float(-1); string text="float(0xffffffffU)";'};
+porter.stepUnsignedFloatConstants(untouchedUint);
+check('integer literals, signed casts and quoted text stay unchanged', untouchedUint.src === 'uint value=0xffffffffU; float signedValue=float(-1); string text="float(0xffffffffU)";');
 let compatMacro = porter.transformGLSL('#define SIZE int2(iResolution)\nvoid mainImage(out vec4 c, vec2 p) { c = vec4(vec2(SIZE), 0., 1.); }', [], 'Image').src;
 check('constructors inside object macros reach vector truncation', /int2\(iResolution.xy\)/.test(compatMacro), compatMacro);
 compatMacro = porter.transformGLSL('#define READ(p) texelFetch(iChannel0, ivec2(p), 0)\n#define ACTIVE(k) (READ(vec2(k,0)).x > 0.5)\nvoid mainImage(out vec4 c, vec2 p) { if ACTIVE(2) c = vec4(1.); else c = vec4(0.); }', [], 'Image', {emptySamplers:['iChannel0']}).src;
