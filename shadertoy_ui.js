@@ -85,8 +85,8 @@ var CH_VOLUMES = [
 
 // Which channel types get a name sub-dropdown
 var CH_HAS_NAME   = { texture: true, cubemap: true, volume: true };
-// Which types support Mipmap filter option (static resources only)
-var CH_HAS_MIPMAP = { texture: true, volume: true };
+// Intermediate render targets can generate mipmaps after each writing pass.
+var CH_HAS_MIPMAP = { texture: true, volume: true, bufA: true, bufB: true, bufC: true, bufD: true, cubemapA: true };
 // Which types support Vflip
 var CH_HAS_VFLIP  = { texture: true, cubemap: true, cubemapA: true, volume: true };
 

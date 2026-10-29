@@ -72,6 +72,13 @@ check('samplers used only by initializers are declared for each pass', /sampler2
 const aliased = '#define INPUT iChannel0\nvoid mainImage(out vec4 c,vec2 p) { c=texture(INPUT,p); }';
 r = assemble([makePass('bufA',['texture'],['London'],{source:aliased}),makePass('image',['texture'],['Blue Noise'],{source:aliased})]);
 check('sampler aliases in macro bodies follow sampler renames', /#define INPUT iChannel0_Image/.test(r.out));
+const indirect='vec4 read(sampler2D s,vec2 p){return texture(s,p);}\nvoid mainImage(out vec4 c,vec2 p){c=read(iChannel1,p);}';
+r=assemble([makePass('image',['none','none'],[],{source:indirect})]);
+check('an unconnected sampler passed to a helper has an explicit zero texture', /Texture = ST_EmptyTexture;/.test(r.out) && /sampler2D iChannel1/.test(r.out));
+check('the zero texture is initialized before shader passes', r.out.indexOf('pass ST_ClearEmpty')<r.out.indexOf('pass Main') && /RenderTarget = ST_EmptyTexture/.test(r.out));
+const mipFeedback=makePass('bufA',['bufA'],[],{filter:'mipmap'});mipFeedback.selfRefChannels=[0];
+r=assemble([mipFeedback,makePass('image',['bufA'],[],{filter:'mipmap'})]);
+check('mipmap-filtered buffers and their feedback copies allocate a full mip chain', count(r.out,/MipLevels = ST_MIP_LEVELS\(BUFFER_WIDTH, BUFFER_HEIGHT\);/g)===2);
 
 console.log((total - bad) + '/' + total + ' sampler tests OK');
 process.exit(bad ? 1 : 0);

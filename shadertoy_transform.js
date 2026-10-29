@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.54';
+var PORTER_VERSION = '3.0.55';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -3164,9 +3164,8 @@ function rewriteArrayLength(src, messages)
 //   tex2Dlod(iChannel3, float4(uv, 0.0, 0.0)).x   →   float4(0.0, 0.0, 0.0, 0.0).x
 //
 // A channel with no texture (the keyboard, a microphone, one left on None) has no sampler to read, and
-// a shader that still reads it would not compile. It reads zero instead: black, and for the keyboard no
-// key pressed, which is where a shader normally starts. The lookups are replaced rather than given an
-// empty texture, because a texture nobody writes to is not guaranteed to be zero in every graphics API.
+// a shader that still reads it would not compile. Direct lookups become zero: black, or no key pressed.
+// If a channel is passed to a helper, the assembler provides a 1x1 texture with an explicit clear pass.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function rewriteEmptyChannels(src, emptySamplers, messages)

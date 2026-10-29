@@ -283,6 +283,8 @@ function buildSamplerBlock(channelConfig, usedChannels, bufTexNames, messages, c
 		}
 		else {
 			lines.push('// iChannel' + i + ' is not mapped to anything: its lookups read as zero (black).');
+			lines.push('texture2D ST_EmptyTexture', '{', '\tWidth = 1;', '\tHeight = 1;', '\tFormat = RGBA32F;', '};');
+			lines.push('sampler2D iChannel' + i, '{', '\tTexture = ST_EmptyTexture;', '\tMinFilter = POINT;', '\tMagFilter = POINT;', '\tAddressU = CLAMP;', '\tAddressV = CLAMP;', '};');
 			messages.push({ level: 'warn', text: 'iChannel' + i + ' is referenced but mapped to None: its lookups read as zero (black).' });
 		}
 	}
@@ -411,6 +413,14 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 	// Build texture name map for buffer passes
 	var bufTexNames = {};
 	activeBufs.forEach(function (p) { bufTexNames[p.id] = 'tex_' + bufLabels[p.id]; });
+	var mipmappedBufs = Object.create(null);
+	transformedPasses.forEach(function (p)
+	{
+		(p.channels || []).forEach(function (channel, i)
+		{
+			if (bufTexNames[channel] && p.filters && p.filters[i] === 'mipmap') { mipmappedBufs[channel] = true; }
+		});
+	});
 
 	// ── Derive technique name ──
 	var techniqueName = 'ShadertoyPort';
@@ -448,6 +458,13 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 
 	lines.push(HELPER_SOURCE);
 	lines.push('');
+	if (Object.keys(mipmappedBufs).length)
+	{
+		var mipTerms = ['1'];
+		for (var level = 1; level <= 16; level++) { mipTerms.push('int((w) >= ' + Math.pow(2,level) + ' || (h) >= ' + Math.pow(2,level) + ')'); }
+		lines.push('// Constant-expression mip count: texture properties cannot call log2/max.');
+		lines.push('#define ST_MIP_LEVELS(w,h) (' + mipTerms.join(' + ') + ')', '');
+	}
 	if (bufTexNames.cubemapA)
 	{
 		lines.push('// Generated cubemap: six faces in +X, -X, +Y, -Y, +Z, -Z order.');
@@ -519,12 +536,13 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 		activeBufs.forEach(function (p) {
 			var texName = bufTexNames[p.id];
 			var dimensions = p.id === 'cubemapA' ? 'Width = 6 * ST_CUBEMAP_SIZE; Height = ST_CUBEMAP_SIZE;' : 'Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT;';
-			lines.push('texture2D ' + texName + ' { ' + dimensions + ' Format = ' + p.format + '; };');
+			var mipLevels = mipmappedBufs[p.id] ? ' MipLevels = ST_MIP_LEVELS(' + (p.id === 'cubemapA' ? 'ST_CUBEMAP_SIZE, ST_CUBEMAP_SIZE' : 'BUFFER_WIDTH, BUFFER_HEIGHT') + ');' : '';
+			lines.push('texture2D ' + texName + ' { ' + dimensions + ' Format = ' + p.format + ';' + mipLevels + ' };');
 			// Emit prev texture for self-referencing passes
 			if (selfRefBufs[p.id]) {
 				var prevTex = bufPrevTexNames[p.id];
 				lines.push('// Previous-frame copy of ' + texName + ' — used for self-referencing channel(s) ' + selfRefBufs[p.id].join(', '));
-				lines.push('texture2D ' + prevTex + ' { ' + dimensions + ' Format = ' + p.format + '; };');
+				lines.push('texture2D ' + prevTex + ' { ' + dimensions + ' Format = ' + p.format + ';' + mipLevels + ' };');
 			}
 		});
 		lines.push('');
@@ -553,6 +571,7 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 	var declaredFunctions = {};
 	var declaredGlobals = {};
 	var declaredStructs = {};
+	var needsEmptyTexture = false;
 	var emittedFlipHelpers = { v2: false, v4: false, dir: false, fetch: false };
 	var flipOptionLines = [];
 	var flipOptionsHaveVflip = false;
@@ -895,6 +914,7 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 			declaredResources, (isBuf ? bufLabels[p.id] : 'Image'), resourceRenames, messages, (isBuf ? bufLabels[p.id] : 'Image')).trim();
 
 		if (samplerBlock) {
+			if (/\bST_EmptyTexture\b/.test(samplerBlock)) { needsEmptyTexture = true; }
 			lines.push('// ── Samplers — ' + (isBuf ? bufLabels[p.id] : 'Image') + ' ──');
 			lines.push(samplerBlock);
 			lines.push('');
@@ -967,12 +987,21 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 	});
 
 	// ── Technique ──
+	if (needsEmptyTexture)
+	{
+		lines.push('// Initialize unconnected samplers explicitly on every graphics API.');
+		lines.push('float4 PS_ST_ClearEmpty(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target', '{', '\treturn float4(0.0, 0.0, 0.0, 0.0);', '}', '');
+	}
 	lines.push('// ── Technique ──');
 	flipOptionLines.push('');
 	lines.splice.apply(lines, [flipOptionsAt, 0].concat(flipOptionLines));
 
 	lines.push('technique ' + techniqueName);
 	lines.push('{');
+	if (needsEmptyTexture)
+	{
+		lines.push('\tpass ST_ClearEmpty', '\t{', '\t\tVertexShader = PostProcessVS;', '\t\tPixelShader = PS_ST_ClearEmpty;', '\t\tRenderTarget = ST_EmptyTexture;', '\t}');
+	}
 	if (usedUniforms.has('iFrame'))
 	{
 		lines.push('\tpass ST_CopyFrame');

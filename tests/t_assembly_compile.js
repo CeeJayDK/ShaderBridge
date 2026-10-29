@@ -8,6 +8,11 @@ const porter = require('./load_porter.js')();
 
 const image = 'void mainImage(out vec4 c,vec2 p) { c=vec4(gain(p.x)); }';
 const cases = [
+	{name:'buffer_mipmaps',sources:[
+		'void mainImage(out vec4 c,vec2 p){float value=mod(floor(p.x)+floor(p.y),2.);c=vec4(value);}',
+		'void mainImage(out vec4 c,vec2 p){float value=textureLod(iChannel0,vec2(.5),5.).r;c=abs(value-.5)<.001?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}'
+	],channels:[[],['bufA']],filters:[[],['mipmap']]},
+	{name:'indirect_empty_sampler',sources:['vec4 fetchValue(sampler2D s,vec2 p){return textureLod(s,p,0.);}\nvoid mainImage(out vec4 c,vec2 p){vec4 v=fetchValue(iChannel1,p);c=all(equal(v,vec4(0.)))?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}'],channels:[['none','none']]},
 	{name:'cubemap_roundtrip',ids:['cubemapA','image'],sources:[
 		'void mainCubemap(out vec4 c,in vec2 p,in vec3 o,in vec3 d){vec4 old=textureLod(iChannel0,d,0.); c=vec4(d*.5+.5,iFrame==0?0.:old.a+.01);}',
 		'void mainImage(out vec4 c,vec2 p){int face=int(p.x*6./iResolution.x); vec3 d=face==0?vec3(1.,.2,.3):face==1?vec3(-1.,.2,.3):face==2?vec3(.2,1.,.3):face==3?vec3(.2,-1.,.3):face==4?vec3(.2,.3,1.):vec3(.2,.3,-1.); d=normalize(d); vec4 v=textureLod(iChannel0,d,0.); bool ok=all(lessThan(abs(v.rgb-(d*.5+.5)),vec3(.002)))&&abs(v.a-float(iFrame)*.01)<.001; c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}'
@@ -42,7 +47,7 @@ function build(test)
 		const used = new Set(); porter.detectUniforms(src, used);
 		const channels=(test.channels || [])[i] || [];
 		const transformed = porter.transformGLSL(src, [], id === 'image' ? 'Image' : id === 'cubemapA' ? 'CubeA' : 'BufA', {cubemapPass:id==='cubemapA',cubemapSamplers:channels.map((kind,ch)=>kind==='cubemapA'?'iChannel'+ch:null).filter(Boolean)});
-		return Object.assign({id:id, usedUniforms:used, channels:channels, channelNames:(test.channelNames || [])[i] || [], filters:['linear'], wraps:['clamp'], vflips:[true], format:'RGBA32F', selfRefChannels:(test.selfRefs || [])[i] || []}, transformed);
+		return Object.assign({id:id, usedUniforms:used, channels:channels, channelNames:(test.channelNames || [])[i] || [], filters:(test.filters || [])[i] || ['linear'], wraps:['clamp'], vflips:[true], format:'RGBA32F', selfRefChannels:(test.selfRefs || [])[i] || []}, transformed);
 	});
 	return porter.assembleFxFile(passes, true, [], test.info || {name:test.name,username:'Synthetic regression'});
 }
