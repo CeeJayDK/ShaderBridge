@@ -11,7 +11,7 @@ var PASS_PLACEHOLDERS =
 	bufB:     '// Buffer B: void mainImage( out vec4 fragColor, in vec2 fragCoord )\n',
 	bufC:     '// Buffer C: void mainImage( out vec4 fragColor, in vec2 fragCoord )\n',
 	bufD:     '// Buffer D: void mainImage( out vec4 fragColor, in vec2 fragCoord )\n',
-	cubemapA: '// Cubemap A: void mainImage( out vec4 fragColor, in vec2 fragCoord )\n',
+	cubemapA: '// Cubemap A: void mainCubemap(out vec4 color, in vec2 pixel, in vec3 origin, in vec3 direction)\n',
 	image:    '// ─────────────────────────────────────────────────────────────────────────\n'
 	        + '// ShaderBridge — Shadertoy → ReShade FX Porter\n'
 	        + '// ─────────────────────────────────────────────────────────────────────────\n'
@@ -659,10 +659,10 @@ function convert()
 		analyzeShader(src, passMessages);
 		detectUniforms(src, usedUniforms);
 		var cubemapSamplers = [];
-		p.channels.forEach(function(kind, ci) { if (kind === 'cubemap') { cubemapSamplers.push('iChannel' + ci); } });
+		p.channels.forEach(function(kind, ci) { if (kind === 'cubemap' || kind === 'cubemapA') { cubemapSamplers.push('iChannel' + ci); } });
 		var emptySamplers = [];
 		p.channels.forEach(function(kind, ci) { if (!kind || kind === 'none') { emptySamplers.push('iChannel' + ci); } });
-		var result = transformGLSL(src, passMessages, passLabel, { cubemapSamplers: cubemapSamplers, emptySamplers: emptySamplers });
+		var result = transformGLSL(src, passMessages, passLabel, { cubemapSamplers: cubemapSamplers, emptySamplers: emptySamplers, cubemapPass: p.id === 'cubemapA' });
 		passMessages.forEach(function(m)
 		{
 			messages.push({ level: m.level, text: '[' + PASS_LABELS[p.id] + '] ' + m.text });

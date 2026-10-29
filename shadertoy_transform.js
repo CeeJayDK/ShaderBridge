@@ -2,14 +2,14 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.52';
+var PORTER_VERSION = '3.0.53';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
 // ═════════════════════════════════════════════════════════════════════════════
 
 function analyzeShader(src, messages) {
-	if (!/\bmainImage\b/.test(src)) {
+	if (!/\b(?:mainImage|mainCubemap)\b/.test(src)) {
 		messages.push({ level: 'error', text: 'No mainImage() found. Is this an Image tab shader?' });
 	}
 	if (/\bmainSound\s*\(/.test(src)) {
@@ -1107,16 +1107,18 @@ function stepD3D9BitOperations(ctx)
 		if (node.op === '>>' && value >= 0 && value <= 30) { name = 'ST_shiftRight'; }
 		else if (node.op === '&' && value >= 0 && value <= 65535 && ((value + 1) & value) === 0) { name = 'ST_lowBits'; }
 		else { return null; }
+		// SM3 lowers uint to int, so signed/unsigned overloads would collide in generated HLSL.
+		if (type === 'uint') { name += '_uint'; }
 		helpers[name + ':' + type] = { name: name, type: type };
 		return name + '(' + render(node.left) + ', ' + render(node.right) + ')';
 	});
 	var declarations = Object.keys(helpers).map(function (key)
 	{
 		var h = helpers[key], type = h.type;
-		var body = h.name === 'ST_shiftRight'
+		var body = h.name.indexOf('ST_shiftRight') === 0
 			? type + '(floor(float(value) * exp2(-float(amount))))'
 			: type + '(float(value) - floor(float(value) / float(amount + 1)) * float(amount + 1))';
-		var nativeOp = h.name === 'ST_shiftRight' ? '>>' : '&';
+		var nativeOp = h.name.indexOf('ST_shiftRight') === 0 ? '>>' : '&';
 		return type + ' ' + h.name + '(' + type + ' value, ' + type + ' amount)\n{\n'
 			+ '#if __RENDERER__ == 0x9000\n\treturn ' + body + ';\n'
 			+ '#else\n\treturn value ' + nativeOp + ' amount;\n#endif\n}\n';
@@ -1331,6 +1333,27 @@ function transformGLSL(src, messages, passLabel, options)
 	var problems = checkTransformPipeline();
 	if (problems.length > 0) { throw new Error('ShaderBridge: the order of the transform steps is wrong: ' + problems.join('; ')); }
 
+	if (options && options.cubemapPass)
+	{
+		src = tokenizeSource(src).map(function (t)
+		{
+			if (t.type === 'ident' && t.text === 'iResolution') { return 'ST_CubeResolution'; }
+			if (t.type === 'preproc') { return t.text.replace(/\biResolution\b/g, 'ST_CubeResolution'); }
+			return t.text;
+		}).join('');
+		src += '\nvec3 ST_cubemap_direction(vec2 coord)\n{\n'
+			+ '\tfloat face=floor(coord.x/float(ST_CUBEMAP_SIZE));\n'
+			+ '\tvec2 uv=vec2(mod(coord.x,float(ST_CUBEMAP_SIZE)),coord.y)*(2./float(ST_CUBEMAP_SIZE))-1.;\n'
+			+ '\tif(face<0.5) return normalize(vec3(1.,-uv.y,-uv.x));\n'
+			+ '\tif(face<1.5) return normalize(vec3(-1.,-uv.y,uv.x));\n'
+			+ '\tif(face<2.5) return normalize(vec3(uv.x,1.,uv.y));\n'
+			+ '\tif(face<3.5) return normalize(vec3(uv.x,-1.,-uv.y));\n'
+			+ '\tif(face<4.5) return normalize(vec3(uv.x,-uv.y,1.));\n'
+			+ '\treturn normalize(vec3(-uv.x,-uv.y,-1.));\n}\n'
+			+ 'void mainImage(out vec4 ST_cubeOutput,in vec2 ST_cubeCoord)\n{\n'
+			+ '\tvec2 ST_cubePixel=vec2(mod(ST_cubeCoord.x,float(ST_CUBEMAP_SIZE)),ST_cubeCoord.y);\n'
+			+ '\tmainCubemap(ST_cubeOutput,ST_cubePixel,vec3(0.),ST_cubemap_direction(ST_cubeCoord));\n}\n';
+	}
 	var ctx = {
 		src: src,
 		messages: messages,

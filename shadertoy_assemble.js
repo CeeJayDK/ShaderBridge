@@ -348,7 +348,10 @@ function buildChannelResolution(channelConfig, channelNames, bufTexNames, usedCh
 		var name = channelNames ? channelNames[i] : '';
 		var wDef, hDef, dDef;
 
-		if (cfg === 'backbuffer' || bufTexNames[cfg]) {
+		if (cfg === 'cubemapA' || cfg === 'cubemapA_prev') {
+			wDef = 'ST_CUBEMAP_SIZE'; hDef = 'ST_CUBEMAP_SIZE'; dDef = null;
+		}
+		else if (cfg === 'backbuffer' || bufTexNames[cfg]) {
 			// Screen-sized: use BUFFER_WIDTH/HEIGHT macros directly (no #define needed)
 			wDef = 'BUFFER_WIDTH';
 			hDef = 'BUFFER_HEIGHT';
@@ -401,8 +404,8 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 	});
 
 	// Buffer pass ids in this file
-	var bufIds = ['bufA', 'bufB', 'bufC', 'bufD'];
-	var bufLabels = { bufA: 'BufA', bufB: 'BufB', bufC: 'BufC', bufD: 'BufD' };
+	var bufIds = ['bufA', 'bufB', 'bufC', 'bufD', 'cubemapA'];
+	var bufLabels = { bufA: 'BufA', bufB: 'BufB', bufC: 'BufC', bufD: 'BufD', cubemapA: 'CubeA' };
 	var activeBufs = transformedPasses.filter(function (p) { return bufIds.indexOf(p.id) !== -1; });
 
 	// Build texture name map for buffer passes
@@ -445,6 +448,13 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 
 	lines.push(HELPER_SOURCE);
 	lines.push('');
+	if (bufTexNames.cubemapA)
+	{
+		lines.push('// Generated cubemap: six faces in +X, -X, +Y, -Y, +Z, -Z order.');
+		lines.push('#ifndef ST_CUBEMAP_SIZE', '#define ST_CUBEMAP_SIZE 1024', '#endif');
+		lines.push('static const float3 ST_CubeResolution = float3(ST_CUBEMAP_SIZE, ST_CUBEMAP_SIZE, 1.0);');
+		lines.push('');
+	}
 
 	// The effect includes nothing, so it works wherever it is put. It declares what it needs of what
 	// ReShade.fxh would have given it: the fullscreen vertex shader (the same one) and, if a channel
@@ -508,12 +518,13 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 		lines.push('// ── Buffer textures ──');
 		activeBufs.forEach(function (p) {
 			var texName = bufTexNames[p.id];
-			lines.push('texture2D ' + texName + ' { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = ' + p.format + '; };');
+			var dimensions = p.id === 'cubemapA' ? 'Width = 6 * ST_CUBEMAP_SIZE; Height = ST_CUBEMAP_SIZE;' : 'Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT;';
+			lines.push('texture2D ' + texName + ' { ' + dimensions + ' Format = ' + p.format + '; };');
 			// Emit prev texture for self-referencing passes
 			if (selfRefBufs[p.id]) {
 				var prevTex = bufPrevTexNames[p.id];
 				lines.push('// Previous-frame copy of ' + texName + ' — used for self-referencing channel(s) ' + selfRefBufs[p.id].join(', '));
-				lines.push('texture2D ' + prevTex + ' { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = ' + p.format + '; };');
+				lines.push('texture2D ' + prevTex + ' { ' + dimensions + ' Format = ' + p.format + '; };');
 			}
 		});
 		lines.push('');
@@ -553,16 +564,18 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 	// Returns array of { sig, start, end } where start/end delimit the full definition.
 	function extractTopLevelFunctions(src) {
 		var fns = [];
+		var fileScope = fileScopeTokenOffsets(src);
 		// Strip comments from a copy used only for scanning — so commented-out
 		// function definitions are invisible to the dedup scanner.
 		var stripped = src
-			.replace(/\/\*[\s\S]*?\*\//g, function (m) { return ' '.repeat(m.length); })
+			.replace(/\/\*[\s\S]*?\*\//g, function (m) { return m.replace(/[^\r\n]/g, ' '); })
 			.replace(/\/\/[^\n]*/g, function (m) { return ' '.repeat(m.length); });
 
 		// Match: return-type identifier ( params ) {
 		var re = /^[ \t]*((?:[\w:*]+\s+)+)([\w]+)\s*\(([^)]*)\)\s*\n?\s*\{/gm;
 		var m;
 		while ((m = re.exec(stripped)) !== null) {
+			if (!fileScope[m.index + m[0].search(/\S/)]) { continue; }
 			var retType = m[1].trim();
 			var name = m[2];
 			var params = m[3].replace(/\s+/g, ' ').trim();

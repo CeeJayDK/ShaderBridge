@@ -116,6 +116,12 @@ function resolveJsonInput(inp, outputIdMap, thisPassId)
 
 	if (type === 'cubemap')
 	{
+		if (outputIdMap[inp.id])
+		{
+			var generated = makeChannel(outputIdMap[inp.id]);
+			generated.filter = filter; generated.wrap = wrap; generated.vflip = vflip;
+			return { ch: generated, warn: null, selfRef: outputIdMap[inp.id] === thisPassId };
+		}
 		var hash     = extractMediaHash(fp);
 		var cubeName = hash ? (SHADERTOY_CUBEMAP_HASH_MAP[hash] || '') : '';
 		var ch = makeChannel('cubemap');

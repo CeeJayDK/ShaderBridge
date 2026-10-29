@@ -3,6 +3,9 @@
 // +X, -X, +Y, -Y, +Z, -Z with every face upright (t grows downwards, so v needs no flip).
 // The expected table below is written from the specification, not copied from the porter.
 const porter = require('./load_porter.js')();
+const fs = require('fs'), vm = require('vm');
+vm.runInContext(fs.readFileSync(require('./sb_dir.js')+'/shadertoy_json.js','utf8'),porter);
+porter.makeChannel = function(type) { return {type:type}; };
 
 let bad = 0, total = 0;
 function check(label, ok, detail)
@@ -11,6 +14,16 @@ function check(label, ok, detail)
 	if (!ok) { bad++; console.log('FAIL', label, detail ? '\n' + detail : ''); }
 }
 const src = porter.CUBEMAP_HELPER_SOURCE;
+const generatedInput=porter.resolveJsonInput({type:'cubemap',id:'synthetic-output',sampler:{filter:'nearest'}},{'synthetic-output':'cubemapA'},'cubemapA');
+check('generated cubemap inputs resolve to their producing pass, including feedback', generatedInput.ch.type==='cubemapA' && generatedInput.selfRef && !generatedInput.warn);
+const cubeSource='void mainCubemap(out vec4 c,in vec2 p,in vec3 o,in vec3 d) { c=vec4(d*0.5+0.5,1.); }';
+const cubeResult=porter.transformGLSL(cubeSource,[],'CubeA',{cubemapPass:true});
+const cubePass={id:'cubemapA',src:cubeResult.src,coordVar:cubeResult.coordVar,mainImageName:cubeResult.mainImageName,usedUniforms:new Set(),channels:['cubemapA'],selfRefChannels:[0],format:'RGBA32F'};
+const displayResult=porter.transformGLSL('void mainImage(out vec4 c,vec2 p){c=texture(iChannel0,vec3(1.,0.,0.));}',[],'Image',{cubemapSamplers:['iChannel0']});
+const cubeFx=porter.assembleFxFile([cubePass,{id:'image',src:displayResult.src,coordVar:displayResult.coordVar,mainImageName:displayResult.mainImageName,usedUniforms:new Set(['iChannel0']),channels:['cubemapA'],format:'RGBA32F'}],true,[],null);
+check('generated cubemaps allocate all six faces with a separate feedback texture', /tex_CubeA \{ Width = 6 \* ST_CUBEMAP_SIZE; Height = ST_CUBEMAP_SIZE;/.test(cubeFx) && /tex_CubeA_Prev/.test(cubeFx));
+check('cubemap passes render before Image and receive face-local pixels and rays', cubeFx.indexOf('pass CubeA')<cubeFx.indexOf('pass Main') && /mainCubemap\(ST_cubeOutput,ST_cubePixel/.test(cubeFx) && /ST_cubemap_direction/.test(cubeFx));
+check('cubemap inputs use generated textures rather than external placeholder images', /Texture   = tex_CubeA;/.test(cubeFx) && !/source = "Cubemap.png"/.test(cubeFx));
 const flat = src.replace(/\s+/g, ' ');
 
 // face index and the (sc, tc) pair divided by the major axis, per the OpenGL specification

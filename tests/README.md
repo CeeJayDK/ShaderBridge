@@ -15,17 +15,17 @@ Run with Node (no dependencies):
 | `t_vflip.js` | V flip at texture sample sites, with the flag passed through sampler parameters, including the offset overloads (40) |
 | `t_texelfetch.js` | `texelFetch` / `textureSize`, and row-mirrored fetches from Vflip textures (20) |
 | `t_samplers.js` | sampler and texture names clashing across passes, including macro aliases and hoisted initializers (18) |
-| `t_common.js` | Common declarations are shared or renamed across passes as needed; macro environments, channel resolutions, indentation, and comment braces preserve each pass's meaning; only passes contributing to Image are selected (52) |
+| `t_common.js` | Common declarations are shared or renamed across passes as needed; macro environments, channel resolutions, indentation, comment braces, and nested else-if blocks preserve each pass's meaning; only passes contributing to Image are selected (53) |
 | `t_glsl_compat.js` | reserved words, `precision`, static globals, array and matrix constructors, comparison functions, switch, macro typing, definition order and name collisions, rectangular matrix expressions, `inverse` / `outerProduct` / `matrixCompMult`, texture lookups, visual sample-rate declarations, `gl_FragCoord`, conditional fallback returns, file-scope detection, and DX9 constant shifts and low-bit masks (293) |
 | `t_functions.js` | ReShade FX has no forward declarations: declarations are removed and callers moved after the functions they call (21) |
 | `t_pipeline.js` | the transform is a list of named steps: the order that matters is declared and checked, and every step proves on its own example that it does something (105) |
 | `t_loops.js` | DX9 for-loop hints, large constant loops, nested and unbraced bodies, explicit attributes, and function reordering (13) |
 | `t_frames.js` | an effect-local frame counter starts at zero after loading, uses separate read/write textures, and runs before shader passes (5) |
-| `t_cubemap.js` | the cubemap helper agrees with the OpenGL cube map table, face order and orientation (28) |
+| `t_cubemap.js` | the cubemap helper agrees with the OpenGL cube map table; generated cubemap inputs, render targets, face-local entry points and feedback are connected correctly (32) |
 | `t_contrast.js` | the page is readable: every text colour has enough contrast, and the critical styles agree with the stylesheet (70) |
 | `t_standalone.js` | the .fx includes nothing; author attribution precedes porter credits, metadata stays inside comments, and frame duration uses seconds (20) |
-| `corpus/run.js` | 158 small GLSL idioms, each ported and compiled with the real ReShade compiler; synthetic DX9 loops and bit operations also check the instruction-slot budget on Windows |
-| `t_assembly_compile.js` | 8 complete synthetic effects, including multipass macro isolation, resource aliases, hoisted texture reads, channel resolutions, and metadata; every entry point compiles for DX11 and, on Windows, DX9 |
+| `corpus/run.js` | 159 small GLSL idioms, each ported and compiled with the real ReShade compiler; synthetic DX9 loops and bit operations also check the instruction-slot budget on Windows |
+| `t_assembly_compile.js` | 11 complete synthetic effects, including generated cubemap feedback, multipass macro isolation, resource aliases, hoisted texture reads, channel resolutions, and metadata; every entry point compiles for DX11 and, on Windows, DX9 |
 | `roundtrip.js` | the lexer must reproduce every shader source exactly |
 
 ## Environment
@@ -66,6 +66,14 @@ Run `npm install jsdom` once in `tools/`, then `node tools/port.js <shader.json>
 with `reshadefx_cli_fixed --list-entry-points -I <shaders> <file.fx>` to see whether the real compiler accepts it.
 
 ## Checking a cubemap by eye
+
+Generated Cubemap A passes use `mainCubemap` and render into a six-face horizontal atlas. Faces are
+1024 by 1024 by default; `ST_CUBEMAP_SIZE` controls the face size. Feedback uses a separate previous-frame
+texture. A cubemap's `iResolution` and channel resolution describe one face, not the entire atlas.
+
+Some complex effects trigger an internal error in Microsoft's shader optimizer. To distinguish that
+from a porter error, retry compilation with `-Od`. For a runtime test, add
+`#pragma reshade skipoptimization` to the local effect. Record this workaround in the test report.
 
 `shaders/CubemapViewer.json` is a Shadertoy shader (it also runs on Shadertoy as it is) that shows the cubemap on channel 0
 as an unfolded cross with coloured frames and as a panorama. Port it, put the cubemap strip where ReShade finds it,

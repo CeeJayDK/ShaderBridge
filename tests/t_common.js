@@ -163,5 +163,9 @@ check('channel-resolution arrays are distinct for each pass', /float3 BufA_iChan
 check('helpers reading different channel resolutions are not merged', /return Image_iChannelResolution\[0\].xy;/.test(resolutionOut) && /dimensions_IMAGE\(/.test(resolutionOut));
 check('hoisted initializers read the resolution for their own pass', /extent = normalize\(Image_iChannelResolution\[0\].xy\);/.test(resolutionOut));
 
+const branches = 'float gain(float x) { if(x<0.) { return 0.; }\n else if(x>1.) { return 1.; }\n return x; }\nvoid mainImage(out vec4 c,vec2 p) { c=vec4(gain(p.x)); }';
+r=assemble([branches,branches]);
+check('else-if blocks inside shared helpers are not mistaken for overlapping functions', count(r.out,/else if/g) === 1 && count(r.out,/float gain\(/g) === 1 && count(r.out,/return 1\.;/g) === 1);
+
 console.log((total - bad) + '/' + total + ' common-tab tests OK');
 process.exit(bad ? 1 : 0);

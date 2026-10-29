@@ -8,6 +8,15 @@ const porter = require('./load_porter.js')();
 
 const image = 'void mainImage(out vec4 c,vec2 p) { c=vec4(gain(p.x)); }';
 const cases = [
+	{name:'cubemap_roundtrip',ids:['cubemapA','image'],sources:[
+		'void mainCubemap(out vec4 c,in vec2 p,in vec3 o,in vec3 d){vec4 old=textureLod(iChannel0,d,0.); c=vec4(d*.5+.5,iFrame==0?0.:old.a+.01);}',
+		'void mainImage(out vec4 c,vec2 p){int face=int(p.x*6./iResolution.x); vec3 d=face==0?vec3(1.,.2,.3):face==1?vec3(-1.,.2,.3):face==2?vec3(.2,1.,.3):face==3?vec3(.2,-1.,.3):face==4?vec3(.2,.3,1.):vec3(.2,.3,-1.); d=normalize(d); vec4 v=textureLod(iChannel0,d,0.); bool ok=all(lessThan(abs(v.rgb-(d*.5+.5)),vec3(.002)))&&abs(v.a-float(iFrame)*.01)<.001; c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}'
+	],channels:[['cubemapA'],['cubemapA']],selfRefs:[[0],[]]},
+	{name:'generated_cubemap',ids:['cubemapA','image'],sources:[
+		'void mainCubemap(out vec4 c,in vec2 p,in vec3 o,in vec3 d){c=vec4(d*.5+.5,1.);}',
+		'void mainImage(out vec4 c,vec2 p){c=texture(iChannel0,vec3(1.,0.,0.));}'
+	],channels:[['cubemapA'],['cubemapA']],selfRefs:[[0],[]]},
+	{name:'nested_else_if',sources:Array(2).fill('float gain(float x){if(x<0.) {return 0.;}\n else if(x>1.) {return 1.;}\n return x;}\n'+image)},
 	{name:'macro_context', sources:[
 		'#define GAIN 0.25\nfloat gain(float x) { return GAIN; }\n'+image,
 		'#define GAIN 0.75\nfloat gain(float x) { return GAIN; }\n'+image]},
@@ -29,10 +38,11 @@ function build(test)
 {
 	const passes = test.sources.map(function (src, i)
 	{
-		const id = i === test.sources.length - 1 ? 'image' : 'bufA';
+		const id = test.ids ? test.ids[i] : i === test.sources.length - 1 ? 'image' : 'bufA';
 		const used = new Set(); porter.detectUniforms(src, used);
-		const transformed = porter.transformGLSL(src, [], id === 'image' ? 'Image' : 'BufA');
-		return Object.assign({id:id, usedUniforms:used, channels:(test.channels || [])[i] || [], channelNames:(test.channelNames || [])[i] || [], filters:['linear'], wraps:['clamp'], vflips:[true], format:'RGBA32F', selfRefChannels:[]}, transformed);
+		const channels=(test.channels || [])[i] || [];
+		const transformed = porter.transformGLSL(src, [], id === 'image' ? 'Image' : id === 'cubemapA' ? 'CubeA' : 'BufA', {cubemapPass:id==='cubemapA',cubemapSamplers:channels.map((kind,ch)=>kind==='cubemapA'?'iChannel'+ch:null).filter(Boolean)});
+		return Object.assign({id:id, usedUniforms:used, channels:channels, channelNames:(test.channelNames || [])[i] || [], filters:['linear'], wraps:['clamp'], vflips:[true], format:'RGBA32F', selfRefChannels:(test.selfRefs || [])[i] || []}, transformed);
 	});
 	return porter.assembleFxFile(passes, true, [], test.info || {name:test.name,username:'Synthetic regression'});
 }

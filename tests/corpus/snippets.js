@@ -1,6 +1,7 @@
 // Small GLSL idioms common in Shadertoy shaders. Each entry: [id, helpers (global code), body of mainImage].
 // Every one is valid GLSL ES 3.00 as Shadertoy accepts it; the porter must turn it into a compiling effect.
 module.exports = [
+	['signed_unsigned_shift_helpers', '', 'int a=int(fragCoord.x); uint b=uint(fragCoord.y); fragColor=vec4(float(a>>1)+float(b>>1u)+float(a&3)+float(b&3u));', {dx9Budget:512}],
 	['macro_definition_order', 'vec2 MAKE(float x) { return vec2(x,x+1.); }\nvec2 before(float x) { return MAKE(x); }\n#define MAKE(x) vec2(x)\n', 'fragColor=vec4(before(fragCoord.x),MAKE(fragCoord.y));'],
 	['macro_variable_name', '#define SCALE(x) ((x)*2.)\n', 'float SCALE=1.; fragColor=vec4(SCALE + SCALE(fragCoord.x));'],
 	['rectangular_matrix', '', 'mat3x2 m=mat3x2(1.,2.,3.,4.,5.,6.); fragColor=vec4(fragCoord*m,1.);'],
