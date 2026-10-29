@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.53';
+var PORTER_VERSION = '3.0.54';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -2440,7 +2440,7 @@ function renameReservedIdentifiers(src, messages)
 function rewriteArrayConstructors(src, structNames)
 {
 	var types = 'float[234]?(?:x[234])?|int[234]?|uint[234]?|bool[234]?' + structNames.map(function (n) { return '|' + n; }).join('');
-	var ctor = new RegExp('\\b(?:' + types + ')\\s*\\[\\s*\\d*\\s*\\]\\s*\\(', 'g');
+	var ctor = new RegExp('\\b(?:' + types + ')\\s*\\[[^\\[\\]]*\\]\\s*\\(', 'g');
 	var out = [];
 	var last = 0;
 	var m;
@@ -2462,7 +2462,7 @@ function rewriteArrayConstructors(src, structNames)
 		ctor.lastIndex = k;
 	}
 	out.push(src.slice(last));
-	var declaration = new RegExp('\\b(' + types + ')\\s*\\[\\s*(\\d*)\\s*\\]\\s+([A-Za-z_]\\w*)(?=\\s*[=;,)])', 'g');
+	var declaration = new RegExp('\\b(' + types + ')\\s*\\[\\s*([^\\[\\]]*?)\\s*\\]\\s+([A-Za-z_]\\w*)(?=\\s*[=;,)])', 'g');
 	return out.join('').replace(declaration, '$1 $3[$2]');
 }
 

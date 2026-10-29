@@ -71,6 +71,9 @@ check('a function returning a struct is not made static', !has(r, 'static S make
 check('locals are not made static', !has(r, 'static S s'));
 
 // ── array constructors (3.0.17)
+r = port('const int COUNT=2;\nconst vec2 points[COUNT]=vec2[COUNT](vec2(1.,2.),vec2(3.,4.));\n', 'fragColor=vec4(points[0],points[1]);');
+check('array constructors accept named constant sizes', /points\[COUNT\]=\{float2\(1\.,2\.\),float2\(3\.,4\.\)\};/.test(r.out), r.out);
+check('type-side array sizes can be constant expressions', porter.rewriteArrayConstructors('float[COUNT + 1] points = float[COUNT + 1](1.,2.,3.);',[]) === 'float points[COUNT + 1] = {1.,2.,3.};');
 r = port('const float W[3] = float[3](0.2, 0.5, 0.3);\n', 'fragColor = vec4(W[1]);');
 check('explicit-size array constructor', has(r, 'W[3] = {0.2, 0.5, 0.3};'), r.out);
 r = port('const vec2 O[2] = vec2[2](vec2(0., 1.), vec2(1., 0.));\n', 'fragColor = vec4(O[0], O[1]);');
