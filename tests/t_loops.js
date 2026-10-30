@@ -31,5 +31,18 @@ const src = 'float f(float x);\nvoid mainImage(out vec4 c, vec2 p) { for (int k 
 const result = porter.transformGLSL(src, messages, 'Image').src;
 check('function dependencies are resolved before hints are inserted', result.indexOf('float f(float x)\n') < result.indexOf('void mainImage_Image') && !messages.some(m => m.level === 'warn' && /#if/.test(m.text)));
 check('the pipeline adds a guarded hint', result.indexOf(directive) >= 0);
+const sampling = 'float4 leaf(float2 p){return tex2D(iChannel0,p);}\nfloat4 middle(float2 p){return leaf(p);}\nvoid mainImage(float2 p,out float4 c){c=middle(p);for(int k=0;k<8;k++){c+=middle(p+float(k));}}';
+const sampled = porter.rewriteLoopGradientTex(sampling, []);
+check('loop helper calls use a specialized version', sampled.includes('c+=ST_loop_middle(p+float(k))'));
+check('calls outside loops retain implicit derivatives', sampled.includes('c=middle(p);') && sampled.includes('float4 leaf(float2 p){return tex2D(iChannel0,p);}'));
+check('nested helpers are specialized transitively', sampled.includes('float4 ST_loop_middle(float2 p){return ST_loop_leaf(p);}'));
+check('only specialized texture helpers use explicit LOD', sampled.includes('float4 ST_loop_leaf(float2 p){return tex2Dlod(iChannel0, float4(p, 0.0, 0.0));}'));
+const collision = porter.rewriteLoopGradientTex('float ST_loop_leaf;\n'+sampling, []);
+check('specialized helper names avoid existing identifiers', collision.includes('float4 ST_loop_leaf_(float2 p)'));
+const overloads = porter.rewriteLoopGradientTex('float4 leaf(float2 p){return tex2D(iChannel0,p);}\nfloat4 leaf(float p){return leaf(float2(p,p));}\nvoid mainImage(float2 p,out float4 c){for(int k=0;k<8;k++){c+=leaf(p.x);}}', []);
+check('all overloads remain available to specialized callers', overloads.includes('float4 ST_loop_leaf(float2 p)') && overloads.includes('float4 ST_loop_leaf(float p){return ST_loop_leaf(float2(p,p));}'));
+const explicit = 'float4 leaf(float2 p){return tex2Dgrad(iChannel0,p,float2(1.,0.),float2(0.,1.));}\nvoid mainImage(float2 p,out float4 c){for(int k=0;k<8;k++){c+=leaf(p);}}';
+check('explicit gradients do not require helper specialization', porter.rewriteLoopGradientTex(explicit, []) === explicit);
+check('running the gradient rewrite twice adds no more helpers', porter.rewriteLoopGradientTex(sampled, []) === sampled);
 console.log((total - bad) + '/' + total + ' loop tests OK');
 process.exit(bad ? 1 : 0);

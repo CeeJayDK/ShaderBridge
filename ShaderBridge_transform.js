@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.67';
+var PORTER_VERSION = '3.0.68';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -149,10 +149,68 @@ function rewriteTextureLod(src)
 	//   texCUBE(samp, uvw)                 → texCUBElod(samp, float4(uvw, 0.0))
 	//   tex2Dbias(samp, float4(uv,0,bias)) → tex2Dlod(samp, float4(uv,0,bias))
 	// tex2Dgrad already provides explicit gradients — left alone.
-	// Only applied inside loop bodies. Runs before comment restore.
+	// Helpers reached from a loop get a separate explicit-LOD version, so calls
+	// outside loops retain their ordinary mip selection. Runs before comment restore.
 function rewriteLoopGradientTex(src, messages)
 {
+	if (!/\b(?:tex2D|tex3D|texCUBE|tex2Dbias)\s*\(/.test(src)) { return src; }
 	var loopGradCount = 0;
+	var analysis = analyzeSource(src), needsLod = {}, callees = {}, cloneNames = {}, usedClones = {};
+	function calls(text, callback)
+	{
+		var tokens = tokenizeSource(text).filter(function (t) { return t.type !== 'ws' && t.type !== 'comment' && t.type !== 'placeholder' && t.type !== 'preproc'; });
+		tokens.forEach(function (t, i)
+		{
+			if (t.type === 'ident' && tokens[i + 1] && tokens[i + 1].text === '(' && (!tokens[i - 1] || tokens[i - 1].text !== '.')) { callback(t); }
+		});
+	}
+	Object.keys(analysis.functions).forEach(function (name)
+	{
+		callees[name] = {};
+		analysis.functions[name].forEach(function (fn)
+		{
+			if (fn.bodyFrom === undefined) { return; }
+			calls(src.slice(analysis.tokens[analysis.sig[fn.bodyFrom]].start, analysis.tokens[analysis.sig[fn.bodyTo]].end), function (t)
+			{
+				if (/^(tex2D|tex3D|texCUBE|tex2Dbias)$/.test(t.text)) { needsLod[name] = true; }
+				if (analysis.functions[t.text]) { callees[name][t.text] = true; }
+			});
+		});
+	});
+	var changed = true;
+	while (changed)
+	{
+		changed = false;
+		Object.keys(callees).forEach(function (name)
+		{
+			if (!needsLod[name] && Object.keys(callees[name]).some(function (callee) { return needsLod[callee]; })) { needsLod[name] = true; changed = true; }
+		});
+	}
+	var identifiers = {};
+	tokenizeSource(src).forEach(function (t) { if (t.type === 'ident') { identifiers[t.text] = true; } });
+	Object.keys(needsLod).forEach(function (name)
+	{
+		var candidate = 'ST_loop_' + name;
+		while (identifiers[candidate]) { candidate += '_'; }
+		cloneNames[name] = candidate;
+		identifiers[candidate] = true;
+	});
+	function useClone(name)
+	{
+		if (usedClones[name]) { return; }
+		usedClones[name] = true;
+		Object.keys(callees[name]).forEach(function (callee) { if (needsLod[callee]) { useClone(callee); } });
+	}
+	function renameCalls(text)
+	{
+		var edits = [];
+		calls(text, function (t)
+		{
+			if (needsLod[t.text]) { useClone(t.text); edits.push(t); }
+		});
+		for (var i = edits.length - 1; i >= 0; i--) { var t = edits[i]; text = text.slice(0, t.start) + cloneNames[t.text] + text.slice(t.end); }
+		return text;
+	}
 	// Table of gradient instructions to rewrite.
 	// fn: original function name (regex-escaped)
 	// argCount: number of top-level comma-separated args
@@ -230,6 +288,27 @@ function rewriteLoopGradientTex(src, messages)
 		return { samp: samp, args: remainingArgs, end: k };
 	}
 
+	function rewriteSamples(body)
+	{
+		gradFns.forEach(function (gf)
+		{
+			var parts = [], last = 0, re = new RegExp(gf.re.source, 'g'), match;
+			while ((match = re.exec(body)) !== null)
+			{
+				var split = splitArgs(body, match.index + match[0].length - 1);
+				if (!split) { continue; }
+				var replacement = gf.rewrite(split.samp, split.args);
+				if (!replacement) { continue; }
+				parts.push(body.slice(last, match.index), replacement);
+				last = split.end;
+				re.lastIndex = last;
+				loopGradCount++;
+			}
+			parts.push(body.slice(last));
+			body = parts.join('');
+		});
+		return body;
+	}
 	var result = [];
 	var last = 0;
 	var loopRe = /\b(for|while)\s*\(/g;
@@ -259,31 +338,7 @@ function rewriteLoopGradientTex(src, messages)
 		var bodyEnd = j;
 		var body = src.slice(bodyStart, bodyEnd);
 
-		// Quick check — skip if no gradient instructions present
-		if (!/\b(tex2D|tex3D|texCUBE|tex2Dbias)\s*\(/.test(body)) { continue; }
-
-		// Apply each gradient function rewrite to the body
-		var newBody = body;
-		gradFns.forEach(function (gf) {
-			var r2 = [];
-			var l2 = 0;
-			var re2 = new RegExp(gf.re.source, 'g');
-			var tm;
-			while ((tm = re2.exec(newBody)) !== null) {
-				var parenOpen = tm.index + tm[0].length - 1;
-				var split = splitArgs(newBody, parenOpen);
-				if (!split) { continue; }
-				var replacement = gf.rewrite(split.samp, split.args);
-				if (!replacement) { continue; }
-				r2.push(newBody.slice(l2, tm.index));
-				r2.push(replacement);
-				l2 = split.end;
-				re2.lastIndex = l2;
-				loopGradCount++;
-			}
-			r2.push(newBody.slice(l2));
-			newBody = r2.join('');
-		});
+		var newBody = rewriteSamples(renameCalls(body));
 
 		result.push(src.slice(last, bodyStart));
 		result.push(newBody);
@@ -292,6 +347,22 @@ function rewriteLoopGradientTex(src, messages)
 	}
 	result.push(src.slice(last));
 	var rewritten = result.join('');
+	if (Object.keys(usedClones).length)
+	{
+		var updated = analyzeSource(rewritten), insertions = [];
+		Object.keys(usedClones).forEach(function (name)
+		{
+			updated.functions[name].forEach(function (fn)
+			{
+				var start = updated.tokens[updated.sig[fn.from]].start;
+				var end = updated.tokens[updated.sig[fn.bodyTo === undefined ? fn.protoTo : fn.bodyTo]].end;
+				var text = rewritten.slice(start, end);
+				text = rewriteSamples(renameCalls(text));
+				insertions.push({ at: end, text: '\n\n' + text });
+			});
+		});
+		insertions.sort(function (a, b) { return b.at - a.at; }).forEach(function (edit) { rewritten = rewritten.slice(0, edit.at) + edit.text + rewritten.slice(edit.at); });
+	}
 	if (loopGradCount > 0) {
 		messages.push({
 			level: 'info', text:
