@@ -1,6 +1,7 @@
 // Small GLSL idioms common in Shadertoy shaders. Each entry: [id, helpers (global code), body of mainImage].
 // Every one is valid GLSL ES 3.00 as Shadertoy accepts it; the porter must turn it into a compiling effect.
 module.exports = [
+	['void_parameter_list','float base(void);\nfloat value(void){return base()+.25;}\nfloat base(void){return .5;}\n','fragColor=vec4(value());'],
 	['mixed_comment_delimiters','// /* disabled note\nvec3 helper(vec2 p){return vec3(p,.25);}\n/* real block */\n','fragColor=vec4(helper(fragCoord),1.);'],
 	['conditional_out_parameter','float choose(float x,out vec4 payload){if(x<.5)return 0.;payload.x=.25;return 1.;}\n','vec4 payload;float tag=choose(fract(fragCoord.x*.01),payload);fragColor=tag>0.?vec4(payload.x):vec4(1.);'],
 	['custom_saturate_helper', 'float saturate(float x){return clamp(x*.25,0.0,1.0);}\n', 'vec3 v=vec3(-1.,.5,2.);fragColor=vec4(clamp(v,0.0,1.0),saturate(2.));'],

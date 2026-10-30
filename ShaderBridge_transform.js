@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.66';
+var PORTER_VERSION = '3.0.67';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -423,6 +423,22 @@ function stepSplitGlobalDeclarators(ctx)
 	var globals = fileScopeTokenOffsets(s);
 	s = s.replace(/;[ \t]*(?=\S)/g, function (match, offset) { return globals[offset] ? ';\n' : match; });
 	ctx.src = s;
+}
+
+function stepVoidParameters(ctx)
+{
+	// GLSL accepts a lone void as an empty parameter list; ReShade FX does not.
+	var A = analyzeSource(ctx.src), removals = [];
+	Object.keys(A.functions).forEach(function (name)
+	{
+		A.functions[name].forEach(function (fn)
+		{
+			var token = A.tokens[A.sig[fn.nameTok + 2]];
+			var close = A.tokens[A.sig[fn.nameTok + 3]];
+			if (token && token.text === 'void' && close && close.text === ')') { removals.push(token); }
+		});
+	});
+	removals.sort(function (a, b) { return b.start - a.start; }).forEach(function (token) { ctx.src = ctx.src.slice(0, token.start) + ctx.src.slice(token.end); });
 }
 
 function stepUnsignedFloatConstants(ctx)
@@ -1423,6 +1439,7 @@ var TRANSFORM_STEPS = [
 	{ name: 'reservedIdentifiers', run: stepReservedIdentifiers },
 	{ name: 'unsignedFloatConstants', run: stepUnsignedFloatConstants, after: ['typeNames'], why: 'floating-point constructor names must already be in HLSL form' },
 	{ name: 'compatibilityMacros', run: stepCompatibilityMacros, after: ['typeNames', 'reservedIdentifiers'], why: 'macro bodies must use the same type and identifier names as the expressions they expand into' },
+	{ name: 'voidParameters', run: stepVoidParameters, after: ['typeNames', 'compatibilityMacros'], why: 'function return types and macro-exposed headers must be visible to the signature scanner' },
 	{ name: 'splitGlobalDeclarators', run: stepSplitGlobalDeclarators, after: ['extractComments'], why: 'it moves comment placeholders and must see them rather than the comments' },
 	{
 		name: 'constToStaticConst',

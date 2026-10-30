@@ -18,6 +18,15 @@ function port(helpers, body)
 }
 const has = (r, text) => r.out.indexOf(text) >= 0;
 
+const voidList=port('float value(void){return .5;}\n','fragColor=vec4(value());');
+check('lone void parameter lists are made empty',has(voidList,'float value()')&&!has(voidList,'value(void)'),voidList.out);
+const voidPrototype=port('float value(void);\nfloat value(void){return .5;}\n','fragColor=vec4(value());');
+check('void prototypes and definitions normalize before dependency sorting',!has(voidPrototype,'value(void)')&&!has(voidPrototype,'float value();'),voidPrototype.out);
+const voidTextCtx={src:'#define LABEL "(void)"\nfloat value(void){return .5;}'};porter.stepVoidParameters(voidTextCtx);
+check('quoted void text remains data',voidTextCtx.src.includes('"(void)"')&&voidTextCtx.src.includes('value()'));
+const namedListCtx={src:'float value(float x){return x;}'};porter.stepVoidParameters(namedListCtx);
+check('named parameters remain intact',namedListCtx.src==='float value(float x){return x;}');
+
 const commentCtx={src:'// /* marker in a line comment\nvec3 helper(vec2 p){return vec3(p,.25);}\n/* real block */\n',comments:[]};
 porter.stepExtractComments(commentCtx);
 check('line comment block markers cannot swallow live code',commentCtx.src.includes('vec3 helper(vec2 p)') && commentCtx.comments.length===2);
