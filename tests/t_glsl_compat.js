@@ -38,9 +38,15 @@ check('three-component array elements are supported', has(r, 'ST_component_set_f
 r = port('', 'vec4 values[2];values[0][1]=1.;fragColor=values[0];');
 check('constant component writes stay direct', !has(r, 'ST_component_'), r.out);
 r = port('', 'mat4 value=mat4(1.);value[0][int(fragCoord.x)&3]=1.;fragColor=value[0];');
-check('matrix row writes are not mistaken for vector arrays', !has(r, 'ST_component_'), r.out);
+check('matrix row writes stay separate from addressable vectors', !has(r, 'ST_component_'), r.out);
 r = port('', 'ivec4 values[2];values[0][int(fragCoord.x)&3]=1;fragColor=vec4(values[0]);');
 check('integer array components are left unchanged', !has(r, 'ST_component_'), r.out);
+r = port('', 'vec4 value=vec4(0.);value[int(fragCoord.x)&3]=2.;fragColor=value;');
+check('standalone vector components use the write helper', has(r,'ST_component_set_float4(value,'),r.out);
+r = port('struct Item{vec3 value;};\n', 'Item item;item.value[int(fragCoord.x)%3]+=2.;fragColor=vec4(item.value,1.);');
+check('vector struct fields use the write helper', has(r,'ST_component_add_float3(item.value,'),r.out);
+r = port('', 'vec2 value=vec2(0.);int i=0;float x=(value[i++]+=2.);fragColor=vec4(value,x,1.);');
+check('standalone component writes evaluate their index once', has(r,'(ST_component_add_float2(value, i++, 2.))'),r.out);
 
 // ── reserved identifiers (3.0.16)
 r = port('', 'float half = 0.5; fragColor = vec4(half);');

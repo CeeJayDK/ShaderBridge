@@ -8,6 +8,7 @@ const porter = require('./load_porter.js')();
 
 const image = 'void mainImage(out vec4 c,vec2 p) { c=vec4(gain(p.x)); }';
 const cases = require('./nested_struct_cases.js').concat([
+	{name:'vector_component_write',sources:['float calls=0.;float nextValue(){calls+=1.;return 4.;}\nvoid mainImage(out vec4 c,vec2 p){vec4 v=vec4(0.);for(int k=0;k<4+min(iFrame,0);k++){if(k>=3)break;float t=0.;for(int j=0;j<2+min(iFrame,0);j++)t+=.5;v[k]=float(k+1)*t;}bool ok=all(equal(v,vec4(1.,2.,3.,0.)));int index=0;float value=(v[index++]=nextValue());ok=ok&&index==1&&calls==1.&&value==4.&&v.x==4.;c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}']},
 	{name:'nested_struct_multipass',sources:[1,2].map(n=>'struct Item{float x;};struct Pair{Item a,b;};void change(inout Item a,inout Item b){a.x+=1.;b.x+=2.;}\nvoid mainImage(out vec4 c,vec2 p){Pair v=Pair(Item('+n+'.),Item(4.));change(v.a,v.b);c=vec4(v.a.x,v.b.x,0.,1.);}')},
 	// SM3 cannot dynamically address array elements for writes, even whole vectors.
 	{name:'array_component_write',shaderModels:['50'],sources:['void mainImage(out vec4 c,vec2 p){vec4 values[16];for(int j=0;j<16;j++)values[j]=vec4(0.);for(int i=0;i<int(p.x);i++)values[i&15][i&3]+=p.y;c=values[0];}']},

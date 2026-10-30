@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.60';
+var PORTER_VERSION = '3.0.61';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -1032,10 +1032,10 @@ function stepGlslHelpers(ctx)
 	ctx.src = s;
 }
 
-function stepArrayComponentWrites(ctx)
+function stepVectorComponentWrites(ctx)
 {
-	// FXC cannot address a dynamic vector component inside an array for writes.
-	// Pass the whole array element by reference; constant swizzles in the helper
+	// FXC cannot address dynamic vector components for writes in rolled loops.
+	// Pass the whole vector by reference; constant swizzles in the helper
 	// keep the loop addressable and evaluate both indices and the RHS only once.
 	var helpers = {};
 	var operations = { '=': 'set', '+=': 'add', '-=': 'sub', '*=': 'mul', '/=': 'div' };
@@ -1043,9 +1043,9 @@ function stepArrayComponentWrites(ctx)
 	{
 		if (node.kind !== 'assign' || !operations[node.op]) { return null; }
 		var target = node.left;
-		if (target.kind !== 'index' || target.index.kind === 'num' || target.base.kind !== 'index' || !/^float[234]$/.test(target.base.type || '')) { return null; }
-		// The outer index must select an array element rather than a matrix row.
-		if (!/\[\]$/.test(target.base.base.type || '')) { return null; }
+		if (target.kind !== 'index' || target.index.kind === 'num' || !/^float[234]$/.test(target.base.type || '')) { return null; }
+		// Matrix rows cannot be passed by reference with a dynamic row index.
+		if (target.base.kind === 'index' && /^float[234]x[234]$/.test(target.base.base.type || '')) { return null; }
 		var type = target.base.type;
 		var name = 'ST_component_' + operations[node.op] + '_' + type;
 		helpers[name] = { type: type, op: node.op };
@@ -1488,15 +1488,15 @@ var TRANSFORM_STEPS = [
 		why: 'file-scope declarations must be static and nested member reads lowered before initializers move out of the source'
 	},
 	{
-		name: 'arrayComponentWrites',
-		run: stepArrayComponentWrites,
+		name: 'vectorComponentWrites',
+		run: stepVectorComponentWrites,
 		after: ['typeNames', 'arrayConstructors'],
 		why: 'expression analysis needs HLSL types and rewritten array constructors'
 	},
 	{
 		name: 'reorderFunctions',
 		run: stepReorderFunctions,
-		after: ['typeNames', 'arrayComponentWrites', 'nestedStructs'],
+		after: ['typeNames', 'vectorComponentWrites', 'nestedStructs'],
 		why: 'the analysis reads HLSL type names and must see generated component-write and nested-struct helpers'
 	},
 	{
