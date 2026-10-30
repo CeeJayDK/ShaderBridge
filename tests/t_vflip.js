@@ -17,6 +17,11 @@ function check(label, got, expected)
 }
 const fnOf = s => 'float4 f()\n{\n\treturn ' + s + ';\n}';
 
+const loopSource = porter.transformGLSL('void mainImage(out vec4 c,vec2 p){c=vec4(0.);for(int i=0;i<4;i++){for(int j=0;j<4;j++){c+=texture(iChannel0,p);}}}',[],'Image').src;
+const flippedLoop = porter.rewriteTextureVFlip(loopSource,{iChannel0:'F0'});
+check('Vflip reaches samples after conditional loop hints are emitted', flippedLoop.count, 1);
+check('loop sample coordinates include the flip helper', /ST_flipV(?:4)?\(/.test(flippedLoop.src), true);
+
 // direct samples
 check('tex2D', run(fnOf('tex2D(iChannel0, uv)')).out, fnOf('tex2D(iChannel0, ST_flipV(uv, F0))'));
 check('tex2D with expression', run(fnOf('tex2D(iChannel0, uv * 2.0 + 0.5)')).out, fnOf('tex2D(iChannel0, ST_flipV(uv * 2.0 + 0.5, F0))'));

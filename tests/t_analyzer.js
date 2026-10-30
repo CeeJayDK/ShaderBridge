@@ -12,6 +12,13 @@ function check(label, ok, detail)
 }
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
+['[loop]', '[unroll(4)]', '[loop]\n[fastopt]'].forEach(function (attribute)
+{
+	const a = porter.analyzeSource('void f(){'+attribute+' for(int i=0;i<4;i++){[branch] if(i>0){float x=sin(float(i));}}}');
+	const seen=[]; a.eachExpression(n=>seen.push(a.textOf(n)));
+	check('statement attributes preserve loop body analysis: '+attribute, seen.includes('sin(float(i))') && a.parseFailures===0, seen.join('; '));
+});
+
 const SRC = [
 	'#define K 2.0',
 	'#define SQ(x) ((x) * (x))   // squares',

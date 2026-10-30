@@ -904,6 +904,14 @@ function anAddWalker(an)
 			{
 				var s = txt(j);
 				if (s === ';' || s === '{' || s === '}' || s === 'else' || s === 'do') { j++; continue; }
+				// HLSL statement attributes precede the statement rather than forming an
+				// expression. In particular, the porter's conditional [loop] hints must
+				// not make later passes skip every texture lookup inside that loop.
+				if (s === '[' && /^(?:loop|unroll|fastopt|flatten|branch|allow_uav_condition)$/.test(txt(j + 1)))
+				{
+					var attributeEnd = matchClose(j, '[', ']');
+					if (attributeEnd >= 0) { j = attributeEnd + 1; continue; }
+				}
 				if (s === 'break' || s === 'continue' || s === 'discard') { j++; continue; }
 				if (s === 'for' && txt(j + 1) === '(')
 				{

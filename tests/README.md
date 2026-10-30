@@ -7,12 +7,12 @@ Run with Node (no dependencies):
 | Suite | What it checks |
 |---|---|
 | `t_types.js` | the analyzer's type inference and scoping (64 cases) |
-| `t_analyzer.js` | what each phase of the analysis adds (tokens, dead branches, macros, structs, signatures, scopes, lookup, expression walk) and that the phases need each other in order (51) |
+| `t_analyzer.js` | what each phase of the analysis adds (tokens, dead branches, macros, structs, signatures, scopes, lookup, expression walk) and that the phases need each other in order (54) |
 | `t_porter_mat.js` | `rewriteInlineMatrixMul`, loaded exactly as it ships, including file-scope initialisers (33) |
 | `t_porter_vec.js` | `rewriteVectorConstructorArgs` (25) |
 | `t_broadcast.js` | scalar broadcast constructors expand, vector conversions and copies do not (31) |
 | `t_flip.js` | the `ST_FLIP_Y` / `ST_VFLIP_*` options, the mouse, no `iResolution` dependency (33) |
-| `t_vflip.js` | V flip at texture sample sites, with the flag passed through sampler parameters, including the offset overloads (40) |
+| `t_vflip.js` | V flip at texture sample sites, with the flag passed through sampler parameters, including offset overloads and loops with HLSL attributes (42) |
 | `t_texelfetch.js` | `texelFetch` / `textureSize`, and row-mirrored fetches from Vflip textures (20) |
 | `t_samplers.js` | sampler and texture names clashing across passes, macro aliases, hoisted initializers, unconnected helper inputs, and buffer mip chains (21) |
 | `t_common.js` | Common declarations are shared or renamed across passes as needed; arrays stay local to each pass; macro environments, channel resolutions, indentation, comment braces, and nested else-if blocks preserve each pass's meaning; only passes contributing to Image are selected (55) |
