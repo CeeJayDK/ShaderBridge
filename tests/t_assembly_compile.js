@@ -8,6 +8,7 @@ const porter = require('./load_porter.js')();
 
 const image = 'void mainImage(out vec4 c,vec2 p) { c=vec4(gain(p.x)); }';
 const cases = require('./nested_struct_cases.js').concat([
+	{name:'custom_saturate_helper',sources:['float saturate(float x){return clamp(x*.25,0.0,1.0);}\nvoid mainImage(out vec4 c,vec2 p){vec3 value=vec3(-1.,.5,2.);vec3 actual=clamp(value,0.0,1.0);bool ok=all(equal(actual,vec3(0.,.5,1.)))&&saturate(2.)==.5;c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}']},
 	{name:'vector_component_write',sources:['float calls=0.;float nextValue(){calls+=1.;return 4.;}\nvoid mainImage(out vec4 c,vec2 p){vec4 v=vec4(0.);for(int k=0;k<4+min(iFrame,0);k++){if(k>=3)break;float t=0.;for(int j=0;j<2+min(iFrame,0);j++)t+=.5;v[k]=float(k+1)*t;}bool ok=all(equal(v,vec4(1.,2.,3.,0.)));int index=0;float value=(v[index++]=nextValue());ok=ok&&index==1&&calls==1.&&value==4.&&v.x==4.;c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}']},
 	{name:'nested_struct_multipass',sources:[1,2].map(n=>'struct Item{float x;};struct Pair{Item a,b;};void change(inout Item a,inout Item b){a.x+=1.;b.x+=2.;}\nvoid mainImage(out vec4 c,vec2 p){Pair v=Pair(Item('+n+'.),Item(4.));change(v.a,v.b);c=vec4(v.a.x,v.b.x,0.,1.);}')},
 	// SM3 cannot dynamically address array elements for writes, even whole vectors.

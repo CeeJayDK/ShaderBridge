@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.62';
+var PORTER_VERSION = '3.0.63';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -869,6 +869,9 @@ function stepEmptyChannels(ctx)
 function stepClampToSaturate(ctx)
 {
 	var s = ctx.src;
+	// A shader's scalar helper can shadow the intrinsic's vector overloads.
+	// Introducing calls to it also makes a clamp-based helper recurse.
+	if (analyzeSource(s).functions.saturate) { return; }
 	// ── clamp(x, 0.0, 1.0) → saturate(x) ────────────────────────────────────
 	s = s.replace(/\bclamp\s*\(\s*([^,]+),\s*0\.0+f?\s*,\s*1\.0+f?\s*\)/g, 'saturate($1)');
 	s = s.replace(/\bclamp\s*\(\s*([^,]+),\s*0\s*,\s*1\s*\)/g, 'saturate($1)');

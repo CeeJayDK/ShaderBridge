@@ -18,6 +18,11 @@ function port(helpers, body)
 }
 const has = (r, text) => r.out.indexOf(text) >= 0;
 
+const customSaturate=port('float saturate(float x){return clamp(x*.25,0.0,1.0);}\n','vec3 v=vec3(-1.,.5,2.);fragColor=vec4(clamp(v,0.0,1.0),saturate(2.));');
+check('clamp inside a saturate helper does not become recursive',has(customSaturate,'clamp(x*.25,0.0,1.0)') && !has(customSaturate,'return saturate('),customSaturate.out);
+check('vector clamps keep their intrinsic overload with a scalar saturate helper',has(customSaturate,'clamp(v,0.0,1.0)'),customSaturate.out);
+check('explicit calls to a custom saturate helper remain intact',has(customSaturate,'saturate(2.)'),customSaturate.out);
+
 let r = port('', 'fragColor=vec4(unpackHalf2x16(0xc0003c00u),0.,1.);');
 check('packed half floats use the low and high halves in order', has(r, 'return f16tof32(uint2(bits, ST_shiftRight_uint(bits, 16)));'), r.out);
 check('half unpack helper is injected once', (r.out.match(/float2 unpackHalf2x16\(/g) || []).length === 1);
