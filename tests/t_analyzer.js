@@ -12,6 +12,13 @@ function check(label, ok, detail)
 }
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
+const castAnalysis=porter.analyzeSource('void f(){float3 v=(float3)0;float scalar=-(float)(1.+2.);float value=3.;float grouped=(value+2.)*3.;}');
+const castRoots=[];castAnalysis.eachExpression(n=>castRoots.push(n));
+check('numeric vector casts retain their target type',castRoots[0].kind==='cast'&&castRoots[0].type==='float3');
+check('unary operators compose with scalar casts',castRoots[1].kind==='unary'&&castRoots[1].child.kind==='cast'&&castRoots[1].type==='float');
+check('ordinary grouped expressions remain groups',castRoots[3].kind==='binary'&&castRoots[3].left.kind==='paren');
+check('porter-generated casts do not count as parse failures',castAnalysis.parseFailures===0);
+
 ['[loop]', '[unroll(4)]', '[loop]\n[fastopt]'].forEach(function (attribute)
 {
 	const a = porter.analyzeSource('void f(){'+attribute+' for(int i=0;i<4;i++){[branch] if(i>0){float x=sin(float(i));}}}');

@@ -7,7 +7,7 @@ Run with Node (no dependencies):
 | Suite | What it checks |
 |---|---|
 | `t_types.js` | the analyzer's type inference and scoping (64 cases) |
-| `t_analyzer.js` | what each phase of the analysis adds (tokens, dead branches, macros, structs, signatures, scopes, lookup, expression walk) and that the phases need each other in order (54) |
+| `t_analyzer.js` | what each phase of the analysis adds (tokens, dead branches, macros, structs, signatures, scopes, lookup, expression walk) and that the phases need each other in order (58) |
 | `t_structs.js` | nested struct values, constructors, deep members, field names and comments, conditional declarations, and aliased out/inout updates (20) |
 | `t_porter_mat.js` | `rewriteInlineMatrixMul`, loaded exactly as it ships, including file-scope initialisers (33) |
 | `t_porter_vec.js` | `rewriteVectorConstructorArgs` (25) |

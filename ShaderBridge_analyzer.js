@@ -776,6 +776,15 @@ function anAddParser(an)
 		function unary(p)
 		{
 			var s = txt(p);
+			// Intermediate ReShade FX includes numeric casts emitted by the porter.
+			// Parse them before treating '(' as an ordinary grouped expression.
+			var castType = s === '(' && txt(p + 2) === ')' && resolveType(txt(p + 1));
+			if (castType && anParseType(castType))
+			{
+				var operand = unary(p + 3);
+				if (!operand) { return null; }
+				return { node: { kind: 'cast', from: p, to: operand.node.to, type: castType, child: operand.node }, next: operand.next };
+			}
 			if (s === '-' || s === '+' || s === '!' || s === '~' || s === '++' || s === '--')
 			{
 				var r = unary(p + 1);
