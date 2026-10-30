@@ -26,6 +26,22 @@ check('shader-defined half unpack function is preserved', !has(r, 'f16tof32('));
 r = port('uint counter=0u; uint nextBits(){counter++; return 0x3c003c00u;}\n', 'fragColor=vec4(unpackHalf2x16(nextBits()),0.,1.);');
 check('half unpack argument is evaluated once', (r.out.match(/unpackHalf2x16\(nextBits\(\)\)/g) || []).length === 1, r.out);
 
+['=', '+=', '-=', '*=', '/='].forEach(function (op, i)
+{
+	r = port('', 'vec4 values[2]; int j=int(fragCoord.y)&3; values[0][j]'+op+'fragCoord.x; fragColor=values[0];');
+	check('dynamic array component supports '+op, has(r, 'ST_component_'+['set','add','sub','mul','div'][i]+'_float4(values[0], j, fragCoord.x)') && has(r, 'value.x '+op+' amount; return value.x;'), r.out);
+});
+r = port('', 'vec2 values[2];int i=0,j=0;float v=(values[i++][j++]+=2.);fragColor=vec4(v);');
+check('component assignment remains an expression with single index evaluations', has(r, '(ST_component_add_float2(values[i++], j++, 2.))'), r.out);
+r = port('', 'vec3 values[2];values[0][int(fragCoord.x)]=1.;fragColor=vec4(values[0],1.);');
+check('three-component array elements are supported', has(r, 'ST_component_set_float3(') && !has(r, 'value.w'), r.out);
+r = port('', 'vec4 values[2];values[0][1]=1.;fragColor=values[0];');
+check('constant component writes stay direct', !has(r, 'ST_component_'), r.out);
+r = port('', 'mat4 value=mat4(1.);value[0][int(fragCoord.x)&3]=1.;fragColor=value[0];');
+check('matrix row writes are not mistaken for vector arrays', !has(r, 'ST_component_'), r.out);
+r = port('', 'ivec4 values[2];values[0][int(fragCoord.x)&3]=1;fragColor=vec4(values[0]);');
+check('integer array components are left unchanged', !has(r, 'ST_component_'), r.out);
+
 // ── reserved identifiers (3.0.16)
 r = port('', 'float half = 0.5; fragColor = vec4(half);');
 check('half is renamed', has(r, 'float half_ = 0.5;') && has(r, 'float4(half_'), r.out);

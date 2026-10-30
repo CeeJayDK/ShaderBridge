@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.57';
+var PORTER_VERSION = '3.0.58';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -1032,6 +1032,39 @@ function stepGlslHelpers(ctx)
 	ctx.src = s;
 }
 
+function stepArrayComponentWrites(ctx)
+{
+	// FXC cannot address a dynamic vector component inside an array for writes.
+	// Pass the whole array element by reference; constant swizzles in the helper
+	// keep the loop addressable and evaluate both indices and the RHS only once.
+	var helpers = {};
+	var operations = { '=': 'set', '+=': 'add', '-=': 'sub', '*=': 'mul', '/=': 'div' };
+	var result = rewriteExpressions(ctx.src, function (node, render)
+	{
+		if (node.kind !== 'assign' || !operations[node.op]) { return null; }
+		var target = node.left;
+		if (target.kind !== 'index' || target.index.kind === 'num' || target.base.kind !== 'index' || !/^float[234]$/.test(target.base.type || '')) { return null; }
+		// The outer index must select an array element rather than a matrix row.
+		if (!/\[\]$/.test(target.base.base.type || '')) { return null; }
+		var type = target.base.type;
+		var name = 'ST_component_' + operations[node.op] + '_' + type;
+		helpers[name] = { type: type, op: node.op };
+		return name + '(' + render(target.base) + ', ' + render(target.index) + ', ' + render(node.right) + ')';
+	});
+	var declarations = Object.keys(helpers).map(function (name)
+	{
+		var helper = helpers[name];
+		var body = '';
+		for (var i = 0; i < +helper.type.slice(-1); i++)
+		{
+			var field = 'value.' + 'xyzw'[i];
+			body += '\tif (component == ' + i + ') { ' + field + ' ' + helper.op + ' amount; return ' + field + '; }\n';
+		}
+		return 'float ' + name + '(inout ' + helper.type + ' value, int component, float amount)\n{\n' + body + '\treturn 0.;\n}\n';
+	}).join('\n');
+	ctx.src = declarations ? declarations + '\n' + result.src : result.src;
+}
+
 function stepFragCoordDeclaration(ctx)
 {
 	var s = ctx.src;
@@ -1268,10 +1301,16 @@ var TRANSFORM_STEPS = [
 		why: 'it looks for file-scope declarations that have been made static'
 	},
 	{
+		name: 'arrayComponentWrites',
+		run: stepArrayComponentWrites,
+		after: ['typeNames', 'arrayConstructors'],
+		why: 'expression analysis needs HLSL types and rewritten array constructors'
+	},
+	{
 		name: 'reorderFunctions',
 		run: stepReorderFunctions,
-		after: ['typeNames'],
-		why: 'the analysis reads HLSL type names'
+		after: ['typeNames', 'arrayComponentWrites'],
+		why: 'the analysis reads HLSL type names and must see generated component-write helpers'
 	},
 	{
 		name: 'glslHelpers',

@@ -8,6 +8,8 @@ const porter = require('./load_porter.js')();
 
 const image = 'void mainImage(out vec4 c,vec2 p) { c=vec4(gain(p.x)); }';
 const cases = [
+	// SM3 cannot dynamically address array elements for writes, even whole vectors.
+	{name:'array_component_write',shaderModels:['50'],sources:['void mainImage(out vec4 c,vec2 p){vec4 values[16];for(int j=0;j<16;j++)values[j]=vec4(0.);for(int i=0;i<int(p.x);i++)values[i&15][i&3]+=p.y;c=values[0];}']},
 	{name:'large_common_arrays',sources:Array(2).fill('const float weights[128]=float[128]('+Array.from({length:128},(_,i)=>i+'.').join(',')+');\nfloat gain(float x){return weights[int(x)&127];}\n'+image)},
 	{name:'conditional_array_lengths',sources:[1,2].map(pick=>'#define PICK '+pick+'\n#if PICK==1\nconst float values[]=float[](1.,2.);\n#else\nconst float values[]=float[](1.,2.,3.);\n#endif\nfloat gain(float x){return float(values.length())+values[int(x)&1];}\n'+image)},
 	{name:'buffer_mipmaps',sources:[
@@ -66,7 +68,7 @@ function run()
 		{
 			const file = path.join(directory, test.name + '.fx');
 			fs.writeFileSync(file, build(test));
-			(process.platform === 'win32' ? ['30','50'] : ['50']).forEach(function (sm)
+			(test.shaderModels || (process.platform === 'win32' ? ['30','50'] : ['50'])).forEach(function (sm)
 			{
 				const front = spawnSync(cli, ['--shader-model',sm,'--list-entry-points',file], {encoding:'utf8',timeout:60000});
 				if (front.status !== 0) { throw new Error(front.stdout + front.stderr); }
