@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.59';
+var PORTER_VERSION = '3.0.60';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -1065,6 +1065,192 @@ function stepArrayComponentWrites(ctx)
 	ctx.src = declarations ? declarations + '\n' + result.src : result.src;
 }
 
+function stepNestedStructs(ctx)
+{
+	ctx.src = flattenNestedStructs(ctx.src, ctx.messages);
+}
+
+function flattenNestedStructs(src, messages)
+{
+	// ReShade rejects struct-valued fields. Flatten one level at a time, with
+	// typed views for reads, assignments, and out/inout arguments. Separate
+	// nested fields of the same object share a wrapper argument so copy-out
+	// cannot overwrite an update to a sibling field.
+	for (var depth = 0; depth < 16; depth++)
+	{
+		var A = analyzeSource(src), layouts = {}, definitions = {}, conditionalStructs = {};
+		var conditionalDepth = 0;
+		A.tokens.forEach(function (token, index)
+		{
+			if (token.type === 'preproc')
+			{
+				if (/^#\s*(?:if|ifdef|ifndef)\b/.test(token.text)) { conditionalDepth++; }
+				else if (/^#\s*endif\b/.test(token.text)) { conditionalDepth--; }
+			}
+			if (conditionalDepth > 0 && token.type === 'ident' && token.text === 'struct')
+			{
+				var next = index + 1;
+				while (A.tokens[next] && A.tokens[next].type === 'ws') { next++; }
+				if (A.tokens[next]) { conditionalStructs[A.tokens[next].text] = true; }
+			}
+		});
+		var structRe = /\bstruct\s+(\w+)\s*\{([^}]*)\}/g, match;
+		while ((match = structRe.exec(src)) !== null)
+		{
+			definitions[match[1]] = Object.prototype.hasOwnProperty.call(definitions, match[1]) ? null : match[2];
+		}
+		Object.keys(A.structs).forEach(function (name)
+		{
+			var fields = A.structs[name].fields;
+			var nested = Object.keys(fields).filter(function (field) { return !!A.structs[fields[field]]; });
+			if (!nested.length || conditionalStructs[name] || definitions[name] == null || /\[/.test(definitions[name])) { return; }
+			if (nested.some(function (field)
+			{
+				var type = fields[field];
+				return conditionalStructs[type] || definitions[type] == null || /\[/.test(definitions[type]) || Object.keys(A.structs[type].fields).some(function (f) { return !!A.structs[A.structs[type].fields[f]]; });
+			})) { return; }
+			var used = Object.keys(fields), layout = { fields: fields, nested: {} };
+			nested.forEach(function (field)
+			{
+				var child = A.structs[fields[field]].fields, names = {};
+				Object.keys(child).forEach(function (f)
+				{
+					var flat = 'ST_' + field + '_' + f;
+					while (used.indexOf(flat) >= 0) { flat += '_'; }
+					used.push(flat); names[f] = flat;
+				});
+				layout.nested[field] = { type: fields[field], fields: child, names: names };
+			});
+			layouts[name] = layout;
+		});
+		if (!Object.keys(layouts).length) { break; }
+		var helpers = [], wrappers = [], serial = 0;
+		function view(node)
+		{
+			if (node.kind !== 'member' || !layouts[node.base.type]) { return null; }
+			var child = layouts[node.base.type].nested[node.field];
+			return child ? { root: node.base, parent: node.base.type, field: node.field, child: child } : null;
+		}
+		function helperName(v, op) { return 'ST_' + op + '_' + v.parent + '_' + v.field; }
+		function direction(param)
+		{
+			for (var i = param.tok - 2; i >= 0; i--)
+			{
+				var text = A.tokens[A.sig[i]].text;
+				if (text === 'inout' || text === 'out') { return text; }
+				if (!/^(?:in|const|highp|mediump|lowp|precise)$/.test(text)) { break; }
+			}
+			return 'in';
+		}
+		function stable(node)
+		{
+			return !/^(?:call|assign|postinc|preinc)$/.test(node.kind) && node.op !== '++' && node.op !== '--' && exprChildren(node).every(stable);
+		}
+		function writableMember(node, render)
+		{
+			if (node.kind !== 'member') { return null; }
+			var nested = view(node.base);
+			if (nested && nested.child.names[node.field]) { return { root: nested.root, field: nested.child.names[node.field] }; }
+			if (layouts[node.base.type] && !layouts[node.base.type].nested[node.field]) { return { root: node.base, field: node.field }; }
+			var base = writableMember(node.base, render);
+			return base ? { root: base.root, field: base.field + '.' + node.field } : null;
+		}
+		Object.keys(layouts).forEach(function (name)
+		{
+			Object.keys(layouts[name].nested).forEach(function (field)
+			{
+				var child = layouts[name].nested[field], v = { parent: name, field: field };
+				var read = [], write = [];
+				Object.keys(child.fields).forEach(function (f)
+				{
+					read.push('\tresult.' + f + ' = value.' + child.names[f] + ';');
+					write.push('\tvalue.' + child.names[f] + ' = replacement.' + f + ';');
+				});
+				helpers.push(child.type + ' ' + helperName(v, 'get') + '(' + name + ' value)\n{\n\t' + child.type + ' result;\n' + read.join('\n') + '\n\treturn result;\n}');
+				helpers.push(child.type + ' ' + helperName(v, 'set') + '(inout ' + name + ' value, ' + child.type + ' replacement)\n{\n' + write.join('\n') + '\n\treturn replacement;\n}');
+			});
+		});
+		var result = rewriteExpressions(src, function (node, render)
+		{
+			var v;
+			if (node.kind === 'assign' && node.op === '=' && (v = view(node.left)))
+			{
+				return helperName(v, 'set') + '(' + render(v.root) + ', ' + render(node.right) + ')';
+			}
+			if (node.kind === 'call' && A.functions[node.name])
+			{
+				var functions = A.functions[node.name].filter(function (fn)
+				{
+					return fn.bodyFrom !== undefined && fn.params.length === node.args.length && fn.params.every(function (p, i) { return !node.args[i].type || p.type === node.args[i].type; });
+				});
+				var fn = functions.length === 1 ? functions[0] : null;
+				if (fn && fn.params.some(function (p, i) { return direction(p) !== 'in' && view(node.args[i]); }))
+				{
+					var name = 'ST_nested_call_' + node.name + '_' + serial++;
+					var params = [], args = [], call = [], before = [], after = [], roots = {};
+					function rootArg(root)
+					{
+						var text = render(root), key = stable(root) ? root.type + ':' + text : 'unstable:' + params.length;
+						if (!roots[key])
+						{
+							roots[key] = 'arg' + params.length;
+							params.push('inout ' + root.type + ' ' + roots[key]); args.push(text);
+						}
+						return roots[key];
+					}
+					node.args.forEach(function (arg, i)
+					{
+						var dir = direction(fn.params[i]), nested = dir !== 'in' && view(arg);
+						if (nested)
+						{
+							var root = rootArg(nested.root), temp = 'nested' + i;
+							before.push('\t' + nested.child.type + ' ' + temp + (dir === 'inout' ? ' = ' + helperName(nested, 'get') + '(' + root + ')' : '') + ';');
+							after.push('\t' + helperName(nested, 'set') + '(' + root + ', ' + temp + ');');
+							call.push(temp);
+						}
+						else if (dir !== 'in' && writableMember(arg, render))
+						{
+							var member = writableMember(arg, render);
+							call.push(rootArg(member.root) + '.' + member.field);
+						}
+						else
+						{
+							var parameter = 'arg' + params.length;
+							params.push(dir + ' ' + fn.params[i].type + ' ' + parameter); args.push(render(arg)); call.push(parameter);
+						}
+					});
+					var invocation = node.name + '(' + call.join(', ') + ')';
+					wrappers.push(fn.ret + ' ' + name + '(' + params.join(', ') + ')\n{\n' + before.join('\n') + '\n\t' + (fn.ret === 'void' ? invocation : fn.ret + ' result = ' + invocation) + ';\n' + after.join('\n') + (fn.ret === 'void' ? '' : '\n\treturn result;') + '\n}');
+					return name + '(' + args.join(', ') + ')';
+				}
+			}
+			if (node.kind === 'member' && (v = view(node.base)) && v.child.names[node.field])
+			{
+				return render(v.root) + '.' + v.child.names[node.field];
+			}
+			if ((v = view(node))) { return helperName(v, 'get') + '(' + render(v.root) + ')'; }
+			return null;
+		});
+		src = result.src.replace(structRe, function (text, name)
+		{
+			if (!layouts[name]) { return text; }
+			var fields = [];
+			Object.keys(layouts[name].fields).forEach(function (field)
+			{
+				var child = layouts[name].nested[field];
+				if (!child) { fields.push('\t' + layouts[name].fields[field] + ' ' + field + ';'); return; }
+				Object.keys(child.fields).forEach(function (f) { fields.push('\t' + child.fields[f] + ' ' + child.names[f] + ';'); });
+			});
+			var comments = (definitions[name].match(/«[^»]*»/g) || []).join('\n');
+			return '\n' + comments + (comments ? '\n' : '') + 'struct ' + name + '\n{\n' + fields.join('\n') + '\n}';
+		});
+		helpers = helpers.concat(wrappers);
+		src += '\n' + helpers.map(function (h) { return h.slice(0, h.indexOf('\n')) + ';'; }).join('\n') + '\n' + helpers.join('\n\n') + '\n';
+		if (messages) { messages.push({ level: 'info', text: 'Flattened nested struct members in ' + Object.keys(layouts).join(', ') + ', preserving value copies and out/inout updates.' }); }
+	}
+	return src;
+}
+
 function stepFragCoordDeclaration(ctx)
 {
 	var s = ctx.src;
@@ -1209,6 +1395,7 @@ var TRANSFORM_STEPS = [
 		why: 'it reads the comment placeholders'
 	},
 	{ name: 'arrayConstructors', run: stepArrayConstructors },
+	{ name: 'nestedStructs', run: stepNestedStructs, after: ['structConstructors', 'arrayConstructors'], why: 'struct constructor helpers and array initializers must be visible to typed member rewrites' },
 	{ name: 'arrayLength', run: stepArrayLength, after: ['arrayConstructors'], why: 'it counts the elements of the braced initialisers that step produces' },
 	{
 		name: 'matrixMul',
@@ -1297,8 +1484,8 @@ var TRANSFORM_STEPS = [
 	{
 		name: 'hoistGlobalInits',
 		run: stepHoistGlobalInits,
-		after: ['constToStaticConst', 'staticGlobals'],
-		why: 'it looks for file-scope declarations that have been made static'
+		after: ['constToStaticConst', 'staticGlobals', 'nestedStructs'],
+		why: 'file-scope declarations must be static and nested member reads lowered before initializers move out of the source'
 	},
 	{
 		name: 'arrayComponentWrites',
@@ -1309,8 +1496,8 @@ var TRANSFORM_STEPS = [
 	{
 		name: 'reorderFunctions',
 		run: stepReorderFunctions,
-		after: ['typeNames', 'arrayComponentWrites'],
-		why: 'the analysis reads HLSL type names and must see generated component-write helpers'
+		after: ['typeNames', 'arrayComponentWrites', 'nestedStructs'],
+		why: 'the analysis reads HLSL type names and must see generated component-write and nested-struct helpers'
 	},
 	{
 		name: 'glslHelpers',
@@ -1436,17 +1623,16 @@ function transformGLSL(src, messages, passLabel, options)
 function rewriteStructConstructors(src, messages) {
 	// ── Step 1: find all struct definitions and parse their members ───────────
 	var structs = {}; // name → [ { type, name }, ... ]
+	var knownStructs = analyzeSource(src).structs;
 	var structRe = /\bstruct\s+(\w+)\s*\{([^}]*)\}/g;
 	var sm;
 	while ((sm = structRe.exec(src)) !== null) {
 		var structName = sm[1];
 		var body = sm[2];
 		var members = [];
-		// Each member line: "type name;" possibly with leading whitespace
-		var memberRe = /\b((?:float[234x]*|int[234]?|uint[234]?|bool[234]?|double)\s+)(\w+)\s*;/g;
-		var mm;
-		while ((mm = memberRe.exec(body)) !== null) {
-			members.push({ type: mm[1].trim(), name: mm[2] });
+		if (knownStructs[structName] && !/\[/.test(body))
+		{
+			Object.keys(knownStructs[structName].fields).forEach(function (field) { members.push({ type: knownStructs[structName].fields[field], name: field }); });
 		}
 		if (members.length > 0) {
 			structs[structName] = members;

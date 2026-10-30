@@ -20,6 +20,10 @@ check('comments are taken out first and put back last', names[0] === 'extractCom
 // What is known about the order, written down here independently of the list itself. Each pair is
 // [earlier, later, why]. The list must agree with all of them.
 const KNOWN = [
+	['structConstructors', 'nestedStructs', 'nested member assignments in constructor helpers must be lowered too'],
+	['arrayConstructors', 'nestedStructs', 'typed analysis needs rewritten array constructors'],
+	['nestedStructs', 'hoistGlobalInits', 'initializers must be lowered before they move out of the source'],
+	['nestedStructs', 'reorderFunctions', 'nested struct helpers must be included in dependency sorting'],
 	['typeNames', 'arrayComponentWrites', 'component helpers need vector types'],
 	['arrayConstructors', 'arrayComponentWrites', 'expression analysis needs rewritten array constructors'],
 	['arrayComponentWrites', 'reorderFunctions', 'component helpers must be defined before their callers'],
@@ -134,6 +138,7 @@ check('two passes do not share anything', names2 === 'mainImage_BufA mainImage',
 // (or, for a step that only passes on information, changes the pass). A step that is skipped or never
 // exercised is found here.
 const EXAMPLES = {
+	nestedStructs: 'struct Item{float x;};struct Pair{Item a;};void mainImage(out vec4 c,vec2 p){Pair v;v.a.x=p.x;c=vec4(v.a.x);}',
 	arrayComponentWrites: 'void mainImage(out vec4 c,vec2 p){vec4 a[2];a[int(p.x)&1][int(p.y)&3]=1.;c=a[0];}',
 	unsignedFloatConstants: 'void mainImage(out vec4 c, vec2 p) { c = vec4(float(0xffffffffU)); }',
 	compatibilityMacros: '#define UV int2(iResolution)\nvoid mainImage(out vec4 c, vec2 p) { c = vec4(vec2(UV), 0., 1.); }',
