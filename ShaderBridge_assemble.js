@@ -587,9 +587,7 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 		var fileScope = fileScopeTokenOffsets(src);
 		// Strip comments from a copy used only for scanning — so commented-out
 		// function definitions are invisible to the dedup scanner.
-		var stripped = src
-			.replace(/\/\*[\s\S]*?\*\//g, function (m) { return m.replace(/[^\r\n]/g, ' '); })
-			.replace(/\/\/[^\n]*/g, function (m) { return ' '.repeat(m.length); });
+		var stripped = replaceSourceComments(src, function (m) { return m.replace(/[^\r\n]/g, ' '); });
 
 		// Match: return-type identifier ( params ) {
 		var re = /^[ \t]*((?:[\w:*]+\s+)+)([\w]+)\s*\(([^)]*)\)\s*\n?\s*\{/gm;
@@ -634,7 +632,7 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 	// Renaming a function changes every function that calls it, so that has to be repeated until nothing new clashes.
 	// Within one pass, repeated signatures are alternatives selected by #if / #else and must all be kept.
 	function normaliseFunctionText(text) {
-		return text.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
+		return replaceSourceComments(text, function () { return ' '; }).replace(/\s+/g, ' ').trim();
 	}
 
 	function deduplicatePassFunctions(src, seen, passTag, messages, passLabel) {

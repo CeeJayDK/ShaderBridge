@@ -26,6 +26,16 @@ function lexIsIdentStart(c) { return (c >= 65 && c <= 90) || (c >= 97 && c <= 12
 function lexIsIdentPart(c) { return lexIsIdentStart(c) || lexIsDigit(c); }
 function lexIsHexDigit(c) { return lexIsDigit(c) || (c >= 65 && c <= 70) || (c >= 97 && c <= 102); }
 
+// Visit comments without mistaking delimiters in quoted text or existing comments
+// for new comments. Shared by conversion, comparison, analysis and highlighting.
+function replaceSourceComments(src, replace)
+{
+	return src.replace(/"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, function (text)
+	{
+		return text[0] === '/' ? replace(text) : text;
+	});
+}
+
 function tokenizeSource(src)
 {
 	var tokens = [];
@@ -165,4 +175,4 @@ function renameIdentifiers(src, map)
 	}).join('');
 }
 
-if (typeof module !== 'undefined') { module.exports = { tokenizeSource: tokenizeSource, renameIdentifiers: renameIdentifiers }; }
+if (typeof module !== 'undefined') { module.exports = { tokenizeSource: tokenizeSource, renameIdentifiers: renameIdentifiers, replaceSourceComments: replaceSourceComments }; }

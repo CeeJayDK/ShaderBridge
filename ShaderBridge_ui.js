@@ -882,15 +882,7 @@ function highlight(src)
 	    return '‹' + String(idx).split('').map(function(d) { return superDigits[+d]; }).join('') + '›';
 	}
 
-	// Block comments first, then line comments
-	var s = src.replace(/\/\*[\s\S]*?\*\//g, function(m)
-	{
-	    var idx = comments.length;
-	    comments.push('<span class="hl-comment">' + escapeHtmlHL(m) + '</span>');
-	    return makePH(idx);
-	});
-
-	s = s.replace(/\/\/[^\n]*/g, function(m)
+	var s = replaceSourceComments(src, function(m)
 	{
 	    var idx = comments.length;
 	    comments.push('<span class="hl-comment">' + escapeHtmlHL(m) + '</span>');

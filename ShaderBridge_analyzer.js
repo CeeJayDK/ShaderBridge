@@ -2,7 +2,7 @@
 // Works on the token stream from lexer.js. Never modifies text; it only answers questions
 // ("what is the type of the expression at tokens a..b?") so rewriters can stop guessing.
 
-var AN = (typeof module !== 'undefined') ? require('./ShaderBridge_lexer.js') : { tokenizeSource: tokenizeSource };
+var AN = (typeof module !== 'undefined') ? require('./ShaderBridge_lexer.js') : { tokenizeSource: tokenizeSource, replaceSourceComments: replaceSourceComments };
 
 var AN_SCALARS = { float: 1, int: 1, uint: 1, bool: 1 };
 
@@ -198,7 +198,7 @@ function anScanMacros(an)
 	{
 		if (t.type !== 'preproc') { return; }
 		// a backslash-continued #define is one token; join its lines and drop comments
-		var text = t.text.replace(/\\\r?\n/g, ' ').replace(/\/\*.*?\*\//g, ' ').replace(/\/\/.*$/, '');
+		var text = AN.replaceSourceComments(t.text.replace(/\\\r?\n/g, ' '), function () { return ' '; });
 		var m = /^#\s*define\s+([A-Za-z_]\w*)(\()?([^\n]*)/.exec(text);
 		if (m && !m[2]) { A.macros[m[1]] = { body: m[3].trim(), type: undefined }; }
 		else if (m)

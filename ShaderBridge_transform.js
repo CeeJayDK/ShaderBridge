@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.65';
+var PORTER_VERSION = '3.0.66';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -314,14 +314,11 @@ function stepExtractComments(ctx)
 		return '«' + s + '»';
 	}
 
-	// Block comments first, then line comments
-	s = s.replace(/\/\*[\s\S]*?\*\//g, function (m) {
+	// Read comments in source order. A block marker inside a line comment
+	// cannot open a block, and quoted preprocessor text is not a comment.
+	s = replaceSourceComments(s, function (m) {
 		xComments.push(m);
-		return xMakePH(xComments.length - 1);
-	});
-	s = s.replace(/\/\/[^\n]*/g, function (m) {
-		xComments.push(m);
-		return xMakePH(xComments.length - 1) + '\n';
+		return xMakePH(xComments.length - 1) + (m.slice(0, 2) === '//' ? '\n' : '');
 	});
 	ctx.src = s;
 }

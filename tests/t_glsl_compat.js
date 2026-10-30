@@ -18,6 +18,17 @@ function port(helpers, body)
 }
 const has = (r, text) => r.out.indexOf(text) >= 0;
 
+const commentCtx={src:'// /* marker in a line comment\nvec3 helper(vec2 p){return vec3(p,.25);}\n/* real block */\n',comments:[]};
+porter.stepExtractComments(commentCtx);
+check('line comment block markers cannot swallow live code',commentCtx.src.includes('vec3 helper(vec2 p)') && commentCtx.comments.length===2);
+check('comment extraction follows source order',commentCtx.comments[0]==='// /* marker in a line comment' && commentCtx.comments[1]==='/* real block */');
+porter.stepRestoreComments(commentCtx);
+check('mixed comment delimiters survive restoration',commentCtx.src.includes('// /* marker in a line comment')&&commentCtx.src.includes('/* real block */'));
+const quotedCommentCtx={src:'#define LABEL "https://example.invalid/a/*b*/"\nfloat x; // tail\n',comments:[]};porter.stepExtractComments(quotedCommentCtx);
+check('quoted preprocessor text does not create comments',quotedCommentCtx.comments.length===1&&quotedCommentCtx.src.includes('"https://example.invalid/a/*b*/"'));
+const mixedComment=port('// /* disabled note\nvec3 helper(vec2 p){return vec3(p,.25);}\n/* real block */\n','fragColor=vec4(helper(fragCoord),1.);');
+check('live code between mixed comments goes through type rewriting',has(mixedComment,'float3 helper(float2 p)')&&!has(mixedComment,'vec3 helper'),mixedComment.out);
+
 const outDefault=port('float choose(float x,out vec4 payload){if(x<.5)return 0.;payload.x=.25;return 1.;}\n','vec4 payload;float tag=choose(fragCoord.x,payload);fragColor=tag>0.?payload:vec4(1.);');
 check('out vectors have a default before an early return', /payload = \(float4\)0;[\s\S]*if\s*\(x<\.5\)/.test(outDefault.out),outDefault.out);
 const inoutDefault=port('void update(inout vec3 value){value+=vec3(1.);}\n','vec3 value=vec3(2.);update(value);fragColor=vec4(value,1.);');

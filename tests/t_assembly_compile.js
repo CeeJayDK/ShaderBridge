@@ -8,6 +8,7 @@ const porter = require('./load_porter.js')();
 
 const image = 'void mainImage(out vec4 c,vec2 p) { c=vec4(gain(p.x)); }';
 const cases = require('./nested_struct_cases.js').concat([
+	{name:'mixed_comment_delimiters',sources:Array(2).fill('// /* disabled note\nvec3 helper(vec2 p){return vec3(p,.25);}\n/* real block */\nvoid mainImage(out vec4 c,vec2 p){vec3 v=helper(vec2(.5,.75));bool ok=all(equal(v,vec3(.5,.75,.25)));c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}')},
 	{name:'numeric_out_path',sources:['float choose(float x,out vec4 payload){if(x<.5)return 0.;payload.x=.25;return 1.;}\nvoid mainImage(out vec4 c,vec2 p){vec4 payload;float tag=choose(fract(p.x*.01),payload);bool ok=tag==0.||payload.x==.25;c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}']},
 	{name:'aggregate_out_path',sources:['struct Info{vec2 offset;float gain;};bool choose(float x,inout float count,out mat2 basis,out Info data,out int label){count+=2.;if(x<.5)return false;basis=mat2(1.);data=Info(vec2(2.,3.),4.);label=7;return true;}\nvoid mainImage(out vec4 c,vec2 p){float count=3.;mat2 basis;Info data;int label;bool selected=choose(fract(p.x*.01),count,basis,data,label);bool ok=count==5.&&(!selected||(basis[0][0]==1.&&basis[0][1]==0.&&data.offset.y==3.&&data.gain==4.&&label==7));c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}']},
 	{name:'array_out_parameter',sources:['void fill(out vec2 values[2]){values[0]=vec2(1.,2.);values[1]=vec2(3.,4.);}\nvoid mainImage(out vec4 c,vec2 p){vec2 values[2];fill(values);bool ok=values[0].y==2.&&values[1].x==3.;c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}']},
