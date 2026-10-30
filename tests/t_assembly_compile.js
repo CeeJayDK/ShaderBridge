@@ -8,6 +8,8 @@ const porter = require('./load_porter.js')();
 
 const image = 'void mainImage(out vec4 c,vec2 p) { c=vec4(gain(p.x)); }';
 const cases = [
+	{name:'large_common_arrays',sources:Array(2).fill('const float weights[128]=float[128]('+Array.from({length:128},(_,i)=>i+'.').join(',')+');\nfloat gain(float x){return weights[int(x)&127];}\n'+image)},
+	{name:'conditional_array_lengths',sources:[1,2].map(pick=>'#define PICK '+pick+'\n#if PICK==1\nconst float values[]=float[](1.,2.);\n#else\nconst float values[]=float[](1.,2.,3.);\n#endif\nfloat gain(float x){return float(values.length())+values[int(x)&1];}\n'+image)},
 	{name:'buffer_mipmaps',sources:[
 		'void mainImage(out vec4 c,vec2 p){float value=mod(floor(p.x)+floor(p.y),2.);c=vec4(value);}',
 		'void mainImage(out vec4 c,vec2 p){float value=textureLod(iChannel0,vec2(.5),5.).r;c=abs(value-.5)<.001?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}'

@@ -71,6 +71,10 @@ check('a function returning a struct is not made static', !has(r, 'static S make
 check('locals are not made static', !has(r, 'static S s'));
 
 // ── array constructors (3.0.17)
+const conditionalArray=porter.transformGLSL('#define PICK 2\n#if PICK==1\nconst float values[]=float[](1.,2.);\n#else\nconst float values[]=float[](1.,2.,3.);\n#endif\nvoid mainImage(out vec4 c,vec2 p){c=vec4(float(values.length()));}',[],'Image').src;
+check('conditional array lengths follow the selected declaration', /#define ST_ARRAY_LENGTH_values \(2\)/.test(conditionalArray) && /#define ST_ARRAY_LENGTH_values \(3\)/.test(conditionalArray) && !/\.length\(/.test(conditionalArray),conditionalArray);
+check('symbolic array lengths retain expression precedence', porter.rewriteArrayLength('const int N=2; float values[N+1]; float x=1./values.length();',[]).includes('1./(N+1)'));
+check('a same-named struct field cannot define a global array length macro', !/ST_ARRAY_LENGTH/.test(porter.rewriteArrayLength('struct Item{float values[3];}; float values[2]; void f(){float x=float(values.length());}',[])));
 r = port('const int COUNT=2;\nconst vec2 points[COUNT]=vec2[COUNT](vec2(1.,2.),vec2(3.,4.));\n', 'fragColor=vec4(points[0],points[1]);');
 check('array constructors accept named constant sizes', /points\[COUNT\]=\{float2\(1\.,2\.\),float2\(3\.,4\.\)\};/.test(r.out), r.out);
 check('type-side array sizes can be constant expressions', porter.rewriteArrayConstructors('float[COUNT + 1] points = float[COUNT + 1](1.,2.,3.);',[]) === 'float points[COUNT + 1] = {1.,2.,3.};');

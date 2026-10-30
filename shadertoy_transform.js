@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.55';
+var PORTER_VERSION = '3.0.56';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -3089,7 +3089,8 @@ function sawParenBeforeBrace(tokens, start, braceIdx)
 function rewriteArrayLength(src, messages)
 {
 	if (!/\.\s*length\s*\(\s*\)/.test(src)) { return src; }
-	var cache = {};
+	var cache = {}, definitions = {}, lengthNames = {}, replacements = {}, insertions = [];
+	var arrayDecls = null;
 
 	// the number of top-level elements in the text between a pair of braces
 	function countElements(text)
@@ -3114,11 +3115,21 @@ function rewriteArrayLength(src, messages)
 	{
 		if (cache[name]) { return cache[name]; }
 		var sizes = [];
-		var re = new RegExp('(?:^|[;{}(,\\s])(?!(?:return|else|case|do|goto|in|out|inout)\\b)[A-Za-z_]\\w*\\s+' + name + '\\s*\\[\\s*(\\d*)\\s*\\]\\s*(=\\s*\\{)?', 'g');
+		definitions[name] = [];
+		var re = new RegExp('(?:^|[;{}(,\\s])(?!(?:return|else|case|do|goto|in|out|inout)\\b)[A-Za-z_]\\w*\\s+' + name + '\\s*\\[\\s*([^\\[\\]]*?)\\s*\\]\\s*(=\\s*\\{)?', 'g');
 		var m;
 		while ((m = re.exec(src)) !== null)
 		{
-			if (m[1]) { sizes.push(parseInt(m[1], 10)); continue; }
+			var size = m[1].trim() || null;
+			var end = m.index + m[0].length, braces = m[2] ? 1 : 0, parens = 0;
+			while (end < src.length)
+			{
+				var ch = src[end];
+				if (ch === ';' && braces === 0 && parens === 0) { end++; break; }
+				if (ch === '{') { braces++; } else if (ch === '}') { braces--; }
+				if (ch === '(') { parens++; } else if (ch === ')') { parens--; }
+				end++;
+			}
 			if (m[2])
 			{
 				// an unsized array: count what is between the braces
@@ -3126,10 +3137,10 @@ function rewriteArrayLength(src, messages)
 				var depth = 1;
 				var to = from;
 				while (to < src.length && depth > 0) { if (src[to] === '{') { depth++; } else if (src[to] === '}') { depth--; } to++; }
-				sizes.push(countElements(src.slice(from, to - 1)));
-				continue;
+				if (size === null) { size = countElements(src.slice(from,to-1)); }
 			}
-			sizes.push(null);
+			sizes.push(size);
+			definitions[name].push({start:m.index+m[0].search(/[A-Za-z_]/),end:end,size:size});
 		}
 		cache[name] = sizes;
 		return sizes;
@@ -3137,14 +3148,36 @@ function rewriteArrayLength(src, messages)
 
 	var replaced = 0;
 	var unresolved = {};
-	var out = src.replace(/(^|[^.\w])([A-Za-z_]\w*)\s*\.\s*length\s*\(\s*\)/g, function (match, before, name)
+	var lengthPattern = /(^|[^.\w])([A-Za-z_]\w*)\s*\.\s*length\s*\(\s*\)/g;
+	src.replace(lengthPattern, function (match, before, name)
 	{
 		var sizes = sizesOf(name);
 		var distinct = sizes.filter(function (v, i) { return sizes.indexOf(v) === i; });
-		if (distinct.length === 1 && distinct[0] !== null) { replaced++; return before + distinct[0]; }
+		if (distinct.length === 1 && distinct[0] !== null) { replaced++; replacements[name] = /^\d+$/.test(String(distinct[0])) ? String(distinct[0]) : '(' + distinct[0] + ')'; return match; }
+		if (distinct.length > 1 && distinct.indexOf(null) < 0)
+		{
+			if (!arrayDecls) { arrayDecls = analyzeSource(src).decls; }
+			var declarations = arrayDecls.filter(function (d) { return d.name === name; });
+			var globalOffsets = fileScopeTokenOffsets(src);
+			if (declarations.length && declarations.every(function (d) { return d.global && /\[\]$/.test(d.type); }) && definitions[name].every(function (d) { return globalOffsets[d.start]; }))
+			{
+				if (!lengthNames[name])
+				{
+					// Keep a definition beside each conditional declaration. The real preprocessor
+					// selects its length, so editing a feature/song define still selects valid data.
+					var macro = 'ST_ARRAY_LENGTH_' + name;
+					while (src.indexOf(macro) >= 0) { macro += '_'; }
+					lengthNames[name] = macro;
+					definitions[name].forEach(function (d) { insertions.push({at:d.end,text:'\n#define ' + macro + ' (' + d.size + ')\n'}); });
+				}
+				replaced++; replacements[name] = lengthNames[name]; return match;
+			}
+		}
 		unresolved[name] = true;
 		return match;
 	});
+	insertions.sort(function (a,b) { return b.at-a.at; }).forEach(function (entry) { src=src.slice(0,entry.at)+entry.text+src.slice(entry.at); });
+	var out = src.replace(lengthPattern,function (match,before,name) { return replacements[name] === undefined ? match : before+replacements[name]; });
 
 	if (messages && replaced > 0)
 	{

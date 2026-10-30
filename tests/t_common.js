@@ -166,6 +166,10 @@ check('hoisted initializers read the resolution for their own pass', /extent = n
 const branches = 'float gain(float x) { if(x<0.) { return 0.; }\n else if(x>1.) { return 1.; }\n return x; }\nvoid mainImage(out vec4 c,vec2 p) { c=vec4(gain(p.x)); }';
 r=assemble([branches,branches]);
 check('else-if blocks inside shared helpers are not mistaken for overlapping functions', count(r.out,/else if/g) === 1 && count(r.out,/float gain\(/g) === 1 && count(r.out,/return 1\.;/g) === 1);
+const arrayCommon='const float weights[128]=float[128]('+Array.from({length:128},(_,i)=>i+'.').join(',')+');\nfloat gain(float x){return weights[int(x)&127];}\nvoid mainImage(out vec4 c,vec2 p){c=vec4(gain(p.x));}';
+r=assemble([arrayCommon,arrayCommon]);
+check('large Common arrays receive pass-local names', /weights_IMAGE\[128\]/.test(r.out) && /return weights_IMAGE\[/.test(r.out));
+check('helpers using pass-local arrays are not merged', /gain_IMAGE\(/.test(r.out));
 
 console.log((total - bad) + '/' + total + ' common-tab tests OK');
 process.exit(bad ? 1 : 0);

@@ -570,6 +570,7 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 	var declaredResources = {}; // texture and sampler declarations already emitted, by name
 	var declaredFunctions = {};
 	var declaredGlobals = {};
+	var declaredArrays = {};
 	var declaredStructs = {};
 	var needsEmptyTexture = false;
 	var emittedFlipHelpers = { v2: false, v4: false, dir: false, fetch: false };
@@ -812,13 +813,21 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 	// types, but here they would be one name. Every use in the pass is renamed, including the ones inside #define
 	// lines and the assignments hoisted to the pass entry point. A struct or global that is declared the same in
 	// the passes is not touched here: deduplicatePassStructs and deduplicatePassGlobals drop the repeat.
-	function renameConflictingNames(src, seenStructs, seenGlobals, passTag, passLabel, messages) {
+	function renameConflictingNames(src, seenStructs, seenGlobals, seenArrays, passTag, passLabel, messages) {
 		var renames = {};
 		if (!passTag) { return { src: src, renames: renames }; }
 		function note(kind, name) {
 			renames[name] = name + passTag;
-			messages.push({ level: 'info', text: '[' + passLabel + '] ' + kind + ' \'' + name + '\' is declared differently in an earlier pass; this pass uses ' + renames[name] + '.' });
+			messages.push({ level: 'info', text: '[' + passLabel + '] ' + kind + ' \'' + name + (kind === 'array' ? '\' is local to an earlier pass; this pass uses ' : '\' is declared differently in an earlier pass; this pass uses ') + renames[name] + '.' });
 		}
+		// Keep arrays local even when their text matches: conditional definitions and large
+		// constant tables cannot safely use the scalar declaration de-duplication below.
+		var arrays = Object.create(null);
+		analyzeSource(src).decls.forEach(function (d) { if (d.global && /\[\]$/.test(d.type)) { arrays[d.name]=true; } });
+		Object.keys(arrays).forEach(function (name)
+		{
+			if (seenArrays[name] || seenGlobals[name] !== undefined) { note('array',name); }
+		});
 		src.replace(structDefinitionPattern(), function (match, name) {
 			var key = match.replace(/\s+/g, ' ').trim();
 			if (seenStructs[name] !== undefined && seenStructs[name] !== key && renames[name] === undefined) { note('struct', name); }
@@ -827,9 +836,10 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 		src.replace(/^[ \t]*(static[ ]+(?:const[ ]+)?(?:float[234x]*|int[234]?|uint[234]?|bool)[ ]+(\w+)[ ]*(?:=[^;\n]*)?;)[ \t]*(?:\/\/[^\n]*)?(?:\n|$)/gm,
 			function (match, decl, name) {
 				var key = decl.replace(/\s+/g, ' ').trim();
-				if (seenGlobals[name] !== undefined && seenGlobals[name] !== key && renames[name] === undefined) { note('global', name); }
+				if (((seenGlobals[name] !== undefined && seenGlobals[name] !== key) || seenArrays[name]) && renames[name] === undefined) { note('global', name); }
 				return match;
 			});
+		Object.keys(arrays).forEach(function (name) { seenArrays[renames[name] || name]=true; });
 		if (Object.keys(renames).length === 0) { return { src: src, renames: renames }; }
 		return { src: renameNamesEverywhere(src, renames), renames: renames };
 	}
@@ -934,7 +944,7 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 		flipHelperLines.forEach(function (l) { lines.push(l); });
 		lines.push('// ── Shader body' + (transformedPasses.length > 1 ? ' — ' + (isBuf ? bufLabels[p.id] : 'Image') : '') + ' ──');
 		var passLabel = isBuf ? bufLabels[p.id] : 'Image';
-		var globalRename = renameConflictingNames(passSrc.trim(), declaredStructs, declaredGlobals, passTag, passLabel, messages);
+		var globalRename = renameConflictingNames(passSrc.trim(), declaredStructs, declaredGlobals, declaredArrays, passTag, passLabel, messages);
 		var dedupedSrc = deduplicatePassStructs(globalRename.src, declaredStructs, messages, passLabel);
 		var functionResult = deduplicatePassFunctions(dedupedSrc, declaredFunctions, passTag, messages, passLabel);
 		dedupedSrc = functionResult.src;
