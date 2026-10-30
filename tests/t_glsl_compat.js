@@ -18,8 +18,16 @@ function port(helpers, body)
 }
 const has = (r, text) => r.out.indexOf(text) >= 0;
 
+let r = port('', 'fragColor=vec4(unpackHalf2x16(0xc0003c00u),0.,1.);');
+check('packed half floats use the low and high halves in order', has(r, 'return f16tof32(uint2(bits, ST_shiftRight_uint(bits, 16)));'), r.out);
+check('half unpack helper is injected once', (r.out.match(/float2 unpackHalf2x16\(/g) || []).length === 1);
+r = port('vec2 unpackHalf2x16(uint bits){return vec2(0.);}\n', 'fragColor=vec4(unpackHalf2x16(0u),0.,1.);');
+check('shader-defined half unpack function is preserved', !has(r, 'f16tof32('));
+r = port('uint counter=0u; uint nextBits(){counter++; return 0x3c003c00u;}\n', 'fragColor=vec4(unpackHalf2x16(nextBits()),0.,1.);');
+check('half unpack argument is evaluated once', (r.out.match(/unpackHalf2x16\(nextBits\(\)\)/g) || []).length === 1, r.out);
+
 // ── reserved identifiers (3.0.16)
-let r = port('', 'float half = 0.5; fragColor = vec4(half);');
+r = port('', 'float half = 0.5; fragColor = vec4(half);');
 check('half is renamed', has(r, 'float half_ = 0.5;') && has(r, 'float4(half_'), r.out);
 r = port('', 'vec3 matrix = vec3(2.); float vector = 1.; float string = 3.; fragColor = vec4(matrix * vector, string);');
 check('matrix / vector / string are renamed', has(r, 'matrix_') && has(r, 'vector_') && has(r, 'string_'));

@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.56';
+var PORTER_VERSION = '3.0.57';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -2741,6 +2741,12 @@ function glslHelperSource(name, n)
 function injectGlslHelpers(src)
 {
 	var helpers = '';
+	// GLSL stores x in the low half and y in the high half. A helper evaluates
+	// the argument once, including when the caller supplies a stateful expression.
+	if (/\bunpackHalf2x16\s*\(/.test(src) && !/\bfloat2\s+unpackHalf2x16\s*\([^)]*\)\s*\{/.test(src))
+	{
+		helpers += 'float2 unpackHalf2x16(uint bits)\n{\n\treturn f16tof32(uint2(bits, bits >> 16));\n}\n\n';
+	}
 	['inverse', 'outerProduct', 'matrixCompMult'].forEach(function (name)
 	{
 		if (!new RegExp('\\b' + name + '\\s*\\(').test(src)) { return; }

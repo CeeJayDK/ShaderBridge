@@ -1,6 +1,7 @@
 // Small GLSL idioms common in Shadertoy shaders. Each entry: [id, helpers (global code), body of mainImage].
 // Every one is valid GLSL ES 3.00 as Shadertoy accepts it; the porter must turn it into a compiling effect.
 module.exports = [
+	['half_float_unpack', '', 'uint bits=uint(fragCoord.x)>100u?0xc0003c00u:0x3800bc00u; fragColor=vec4(unpackHalf2x16(bits),0.,1.);'],
 	['conditional_array_length', '#define PICK 2\n#if PICK==1\nconst float values[]=float[](1.,2.);\n#else\nconst float values[]=float[](1.,2.,3.);\n#endif\n', 'fragColor=vec4(float(values.length()));'],
 	['symbolic_array_length', 'const int COUNT=2;\n', 'float values[COUNT+1]=float[COUNT+1](1.,2.,3.); fragColor=vec4(1./float(values.length()));'],
 	['array_constant_size', 'const int COUNT=2;\nconst vec2 points[COUNT]=vec2[COUNT](vec2(1.,2.),vec2(3.,4.));\n', 'fragColor=vec4(points[0],points[1]);'],
