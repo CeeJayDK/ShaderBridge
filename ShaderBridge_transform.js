@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.69';
+var PORTER_VERSION = '3.0.70';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -510,6 +510,49 @@ function stepVoidParameters(ctx)
 		});
 	});
 	removals.sort(function (a, b) { return b.start - a.start; }).forEach(function (token) { ctx.src = ctx.src.slice(0, token.start) + ctx.src.slice(token.end); });
+}
+
+function stepArrayDeclarators(ctx)
+{
+	// GLSL permits the array size on the type: float[3] a, b. FX requires
+	// the size on every variable instead: float a[3], b[3].
+	var A = analyzeSource(ctx.src), tokens = A.sig.map(function (i) { return A.tokens[i]; }), edits = [], parameters = [];
+	function text(i) { return tokens[i] ? tokens[i].text : ''; }
+	function close(i)
+	{
+		var right = { '[': ']', '(': ')', '{': '}' }[text(i)], depth = 1;
+		for (var j = i + 1; j < tokens.length; j++)
+		{
+			if (text(j) === text(i)) { depth++; }
+			else if (text(j) === right && --depth === 0) { return j; }
+		}
+		return tokens.length;
+	}
+	Object.keys(A.functions).forEach(function (name)
+	{
+		A.functions[name].forEach(function (fn) { parameters.push({ from: fn.nameTok + 1, to: close(fn.nameTok + 1) }); });
+	});
+	for (var i = 0; i < tokens.length; i++)
+	{
+		if (!(anParseType(text(i)) || A.structs[text(i)]) || text(i + 1) !== '[') { continue; }
+		var first = i + 1, last = first;
+		while (text(last) === '[') { last = close(last) + 1; }
+		if (!tokens[last] || tokens[last].type !== 'ident' || text(last + 1) === '(') { continue; }
+		var dimensions = ctx.src.slice(tokens[first].start, tokens[last - 1].end);
+		edits.push({ start: tokens[first].start, end: tokens[last - 1].end, text: '' });
+		edits.push({ start: tokens[last].end, end: tokens[last].end, text: dimensions });
+		if (parameters.some(function (range) { return i > range.from && i < range.to; })) { continue; }
+		for (var j = last + 1; j < tokens.length; j++)
+		{
+			if (text(j) === '[' || text(j) === '(' || text(j) === '{') { j = close(j); }
+			else if (text(j) === ';' || text(j) === ')') { break; }
+			else if (text(j) === ',' && tokens[j + 1] && tokens[j + 1].type === 'ident')
+			{
+				edits.push({ start: tokens[j + 1].end, end: tokens[j + 1].end, text: dimensions });
+			}
+		}
+	}
+	edits.sort(function (a, b) { return b.start - a.start; }).forEach(function (edit) { ctx.src = ctx.src.slice(0, edit.start) + edit.text + ctx.src.slice(edit.end); });
 }
 
 function stepUnsignedFloatConstants(ctx)
@@ -1549,10 +1592,11 @@ var TRANSFORM_STEPS = [
 	{ name: 'uniformRedeclarations', run: stepUniformRedeclarations },
 	{ name: 'floatSuffix', run: stepFloatSuffix },
 	{ name: 'typeNames', run: stepTypeNames },
+	{ name: 'arrayDeclarators', run: stepArrayDeclarators, after: ['typeNames'], why: 'array type names must be in HLSL form before their dimensions move to the variable' },
 	{
 		name: 'structConstructors',
 		run: stepStructConstructors,
-		after: ['typeNames'],
+		after: ['typeNames', 'arrayDeclarators'],
 		why: 'member types must already be in HLSL form'
 	},
 	{ name: 'intrinsicNames', run: stepIntrinsicNames },
@@ -1560,7 +1604,7 @@ var TRANSFORM_STEPS = [
 	{ name: 'unsignedFloatConstants', run: stepUnsignedFloatConstants, after: ['typeNames'], why: 'floating-point constructor names must already be in HLSL form' },
 	{ name: 'compatibilityMacros', run: stepCompatibilityMacros, after: ['typeNames', 'reservedIdentifiers'], why: 'macro bodies must use the same type and identifier names as the expressions they expand into' },
 	{ name: 'voidParameters', run: stepVoidParameters, after: ['typeNames', 'compatibilityMacros'], why: 'function return types and macro-exposed headers must be visible to the signature scanner' },
-	{ name: 'splitGlobalDeclarators', run: stepSplitGlobalDeclarators, after: ['extractComments'], why: 'it moves comment placeholders and must see them rather than the comments' },
+	{ name: 'splitGlobalDeclarators', run: stepSplitGlobalDeclarators, after: ['extractComments', 'arrayDeclarators'], why: 'it moves comment placeholders and needs array dimensions on each declarator' },
 	{
 		name: 'constToStaticConst',
 		run: stepConstToStaticConst,

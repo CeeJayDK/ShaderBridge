@@ -17,6 +17,15 @@ function port(helpers, body)
 	return { out: r.src, messages: messages };
 }
 const has = (r, text) => r.out.indexOf(text) >= 0;
+function arrayDeclaration(src) { const ctx={src:src};porter.stepArrayDeclarators(ctx);return ctx.src; }
+check('array dimensions on a type move onto the variable',arrayDeclaration('float[3] a;')==='float a[3];');
+check('grouped array declarations each retain their dimensions',arrayDeclaration('float[3] a,b;')==='float a[3],b[3];');
+check('constructor commas do not become declarators',arrayDeclaration('float2[2] a=float2[2](float2(1.,2.),float2(3.,4.)),b;')==='float2 a[2]=float2[2](float2(1.,2.),float2(3.,4.)),b[2];');
+check('array parameter dimensions do not leak into the next parameter',arrayDeclaration('void f(out float[3] a,float value){a[0]=value;}')==='void f(out float a[3],float value){a[0]=value;}');
+check('ordinary array declarations remain intact',arrayDeclaration('float a[3];')==='float a[3];');
+check('comments around dimensions survive',arrayDeclaration('float /* a */ [3] /* b */ values;')==='float /* a */  /* b */ values[3];');
+check('quoted array text remains data',arrayDeclaration('#define LABEL "float[3] a"\nfloat[3] values;')==='#define LABEL "float[3] a"\nfloat values[3];');
+check('struct array element types are recognized',arrayDeclaration('struct Item{float x;};Item[2] a;')==='struct Item{float x;};Item a[2];');
 
 const voidList=port('float value(void){return .5;}\n','fragColor=vec4(value());');
 check('lone void parameter lists are made empty',has(voidList,'float value()')&&!has(voidList,'value(void)'),voidList.out);
