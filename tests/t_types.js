@@ -1,4 +1,4 @@
-const {analyzeSource} = require(require('./sb_dir.js') + '/shadertoy_analyzer.js');
+const {analyzeSource} = require(require('./sb_dir.js') + '/ShaderBridge_analyzer.js');
 const pre = `
 struct Ray { float3 o; float3 d; };
 float2x2 M;

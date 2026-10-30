@@ -6,7 +6,7 @@ if (!fs.existsSync(JSON_DIR) || !fs.readdirSync(JSON_DIR).some(f => f.endsWith('
 	console.log('SKIP roundtrip: no Shadertoy .json files in ' + JSON_DIR + ' (set SHADER_JSON_DIR)');
 	process.exit(0);
 }
-const {tokenizeSource} = require(require('./sb_dir.js') + '/shadertoy_lexer.js');
+const {tokenizeSource} = require(require('./sb_dir.js') + '/ShaderBridge_lexer.js');
 let bad = 0, total = 0;
 const files = fs.readdirSync(JSON_DIR).filter(f => f.endsWith('.json'));
 for (const f of files)

@@ -1,5 +1,5 @@
 const fs = require('fs');
-const {analyzeSource, anParseType} = require(require('./sb_dir.js') + '/shadertoy_analyzer.js');
+const {analyzeSource, anParseType} = require(require('./sb_dir.js') + '/ShaderBridge_analyzer.js');
 const path = require('path');
 const dir = (process.env.FX_DIR || path.join(__dirname, 'ported')) + '/';
 if (!fs.existsSync(dir))

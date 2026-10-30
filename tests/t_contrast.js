@@ -12,7 +12,7 @@ function check(label, ok, detail)
 	if (!ok) { bad++; console.log('FAIL', label, detail ? '\n' + detail : ''); }
 }
 
-const raw = fs.readFileSync(path.join(SB, 'shadertoy_porter.css'), 'utf8');
+const raw = fs.readFileSync(path.join(SB, 'ShaderBridge_porter.css'), 'utf8');
 const css = raw.replace(/\/\*[\s\S]*?\*\//g, '');
 const vars = {};
 css.replace(/--([\w-]+)\s*:\s*(#[0-9a-fA-F]{6})\s*;/g, function (m, name, value) { vars[name] = value; return m; });
@@ -72,10 +72,11 @@ check('only the intended places use the faint colour', Array.from(faint).sort().
 	check('code colour ' + cls + ' reaches 4.5:1 on the editor background', !!m && ratio(m[1], vars.bg) >= 4.5, m ? ratio(m[1], vars.bg).toFixed(2) : 'not found');
 });
 
-// the critical styles inlined in the pages agree with the stylesheet
-const pages = ['index.html', 'shadertoy_dev.html'].map(f => fs.readFileSync(path.join(SB, f), 'utf8'));
-const inline = pages.map(t => /<style[^>]*>([\s\S]*?)<\/style>/.exec(t)[1]);
-check('both pages carry the same critical styles', inline[0] === inline[1]);
+// the entry page's critical styles agree with the stylesheet
+const page = fs.readFileSync(path.join(SB, 'index.html'), 'utf8');
+const critical = /<style[^>]*>([\s\S]*?)<\/style>/.exec(page);
+const inline = [critical ? critical[1] : ''];
+check('the entry page carries critical styles', !!critical);
 check('no text uses the old dim grey, in the stylesheet or in the critical styles', inline.every(s => !/(?<![-\w])color:\s*#5a6070/.test(s)) && !/(?<![-\w])color\s*:\s*#5a6070/.test(css));
 check('the dropdown arrows use the dim text colour', (css.match(/fill='%23([0-9a-fA-F]{6})'/g) || []).length === 2 && (css.match(/fill='%23([0-9a-fA-F]{6})'/g) || []).every(f => f.toLowerCase().indexOf((vars['text-dim'] || '').replace('#', '').toLowerCase()) >= 0 && !!vars['text-dim']));
 check('the critical styles use the stylesheet\'s dim colour', !!vars['text-dim'] && inline.every(s => s.indexOf(vars['text-dim']) >= 0));

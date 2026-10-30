@@ -2,7 +2,7 @@
 // Works on the token stream from lexer.js. Never modifies text; it only answers questions
 // ("what is the type of the expression at tokens a..b?") so rewriters can stop guessing.
 
-var AN = (typeof module !== 'undefined') ? require('./shadertoy_lexer.js') : { tokenizeSource: tokenizeSource };
+var AN = (typeof module !== 'undefined') ? require('./ShaderBridge_lexer.js') : { tokenizeSource: tokenizeSource };
 
 var AN_SCALARS = { float: 1, int: 1, uint: 1, bool: 1 };
 

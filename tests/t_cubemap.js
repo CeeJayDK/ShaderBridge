@@ -4,7 +4,7 @@
 // The expected table below is written from the specification, not copied from the porter.
 const porter = require('./load_porter.js')();
 const fs = require('fs'), vm = require('vm');
-vm.runInContext(fs.readFileSync(require('./sb_dir.js')+'/shadertoy_json.js','utf8'),porter);
+vm.runInContext(fs.readFileSync(require('./sb_dir.js')+'/ShaderBridge_json.js','utf8'),porter);
 porter.makeChannel = function(type) { return {type:type}; };
 
 let bad = 0, total = 0;
