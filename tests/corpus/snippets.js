@@ -1,6 +1,7 @@
 // Small GLSL idioms common in Shadertoy shaders. Each entry: [id, helpers (global code), body of mainImage].
 // Every one is valid GLSL ES 3.00 as Shadertoy accepts it; the porter must turn it into a compiling effect.
 module.exports = [
+	['conditional_out_parameter','float choose(float x,out vec4 payload){if(x<.5)return 0.;payload.x=.25;return 1.;}\n','vec4 payload;float tag=choose(fract(fragCoord.x*.01),payload);fragColor=tag>0.?vec4(payload.x):vec4(1.);'],
 	['custom_saturate_helper', 'float saturate(float x){return clamp(x*.25,0.0,1.0);}\n', 'vec3 v=vec3(-1.,.5,2.);fragColor=vec4(clamp(v,0.0,1.0),saturate(2.));'],
 	['inactive_nested_struct', '#if 0\nstruct Item{float x;};struct Pair{Item a;};\n#endif\n', 'fragColor=vec4(1.);'],
 	['half_float_unpack', '', 'uint bits=uint(fragCoord.x)>100u?0xc0003c00u:0x3800bc00u; fragColor=vec4(unpackHalf2x16(bits),0.,1.);'],

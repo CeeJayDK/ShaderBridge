@@ -18,6 +18,23 @@ function port(helpers, body)
 }
 const has = (r, text) => r.out.indexOf(text) >= 0;
 
+const outDefault=port('float choose(float x,out vec4 payload){if(x<.5)return 0.;payload.x=.25;return 1.;}\n','vec4 payload;float tag=choose(fragCoord.x,payload);fragColor=tag>0.?payload:vec4(1.);');
+check('out vectors have a default before an early return', /payload = \(float4\)0;[\s\S]*if\s*\(x<\.5\)/.test(outDefault.out),outDefault.out);
+const inoutDefault=port('void update(inout vec3 value){value+=vec3(1.);}\n','vec3 value=vec3(2.);update(value);fragColor=vec4(value,1.);');
+check('inout parameters retain their incoming value',!has(inoutDefault,'value = (float3)0;'),inoutDefault.out);
+const outArrayCtx={src:'void fill(out float values[2]){values[0]=1.;values[1]=2.;}'};
+porter.stepOutParameters(outArrayCtx);
+check('output arrays are not assigned scalar defaults',outArrayCtx.src==='void fill(out float values[2]){values[0]=1.;values[1]=2.;}');
+const outStructCtx={src:'struct Info{float gain;float2 offset;};void fill(out Info data){if(false)return;data.gain=2.;data.offset=float2(3.,4.);}'};
+porter.stepOutParameters(outStructCtx);
+check('flat output structs initialize every numeric field',/data.gain = \(float\)0;/.test(outStructCtx.src)&&/data.offset = \(float2\)0;/.test(outStructCtx.src),outStructCtx.src);
+const outPrototypeCtx={src:'void fill(out float value);'};porter.stepOutParameters(outPrototypeCtx);
+check('output prototypes remain declarations',outPrototypeCtx.src==='void fill(out float value);');
+const variantOutCtx={src:'#if PICK\nstruct Info{float a;};\n#else\nstruct Info{float b;};\n#endif\nvoid fill(out Info data){}'};porter.stepOutParameters(variantOutCtx);
+check('conditional struct variants do not gain defaults from another branch',!/= \(float\)0;/.test(variantOutCtx.src));
+const cubeOutCtx={src:'void mainCubemap(out float4 color,float2 p,float3 o,float3 d){if(d.x<0.)return;color=float4(1.,1.,1.,1.);}'};porter.stepOutParameters(cubeOutCtx);
+check('cubemap helpers initialize their output too',/color = \(float4\)0;/.test(cubeOutCtx.src));
+
 const customSaturate=port('float saturate(float x){return clamp(x*.25,0.0,1.0);}\n','vec3 v=vec3(-1.,.5,2.);fragColor=vec4(clamp(v,0.0,1.0),saturate(2.));');
 check('clamp inside a saturate helper does not become recursive',has(customSaturate,'clamp(x*.25,0.0,1.0)') && !has(customSaturate,'return saturate('),customSaturate.out);
 check('vector clamps keep their intrinsic overload with a scalar saturate helper',has(customSaturate,'clamp(v,0.0,1.0)'),customSaturate.out);

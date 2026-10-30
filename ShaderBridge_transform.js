@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.63';
+var PORTER_VERSION = '3.0.64';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -1073,6 +1073,60 @@ function stepNestedStructs(ctx)
 	ctx.src = flattenNestedStructs(ctx.src, ctx.messages);
 }
 
+function stepOutParameters(ctx)
+{
+	// GLSL permits unassigned out values on paths where callers do not use them.
+	// FXC still validates every return path. Defaults fill otherwise undefined paths;
+	// explicit writes determine outputs, and inout arguments retain incoming values.
+	var A = analyzeSource(ctx.src), insertions = [];
+	var structBodies = {};
+	function zero(type)
+	{
+		var parsed = anParseType(type);
+		if (parsed && parsed.kind === 'mat')
+		{
+			var elements = [];
+			for (var i = 0; i < parsed.rows * parsed.cols; i++) { elements.push('0.0'); }
+			return type + '(' + elements.join(', ') + ')';
+		}
+		return '(' + type + ')0';
+	}
+	ctx.src.replace(/\bstruct\s+(\w+)\s*\{([^}]*)\}/g, function (_, name, body)
+	{
+		structBodies[name] = Object.prototype.hasOwnProperty.call(structBodies, name) ? null : body;
+		return _;
+	});
+	Object.keys(A.functions).forEach(function (name)
+	{
+		if (name === 'mainImage') { return; } // Its output is initialized by stepMainImageBody.
+		A.functions[name].forEach(function (fn)
+		{
+			if (fn.bodyFrom === undefined) { return; }
+			var defaults = [];
+			fn.params.forEach(function (param)
+			{
+				var direction = 'in';
+				for (var i = param.tok - 2; i >= 0; i--)
+				{
+					var text = A.tokens[A.sig[i]].text;
+					if (text === 'inout' || text === 'out') { direction = text; break; }
+					if (!/^(?:in|const|highp|mediump|lowp|precise)$/.test(text)) { break; }
+				}
+				var next = A.tokens[A.sig[param.tok + 1]];
+				if (direction !== 'out' || (next && next.text === '[')) { return; }
+				if (anParseType(param.type)) { defaults.push(param.name + ' = ' + zero(param.type) + ';'); return; }
+				var structure = A.structs[param.type];
+				if (!structure || !structBodies[param.type] || /\[/.test(structBodies[param.type])) { return; }
+				var fields = Object.keys(structure.fields);
+				if (!fields.every(function (field) { return !!anParseType(structure.fields[field]); })) { return; }
+				fields.forEach(function (field) { defaults.push(param.name + '.' + field + ' = ' + zero(structure.fields[field]) + ';'); });
+			});
+			if (defaults.length) { insertions.push({ at: A.tokens[A.sig[fn.bodyFrom]].end, text: '\n\t' + defaults.join('\n\t') + '\n' }); }
+		});
+	});
+	insertions.sort(function (a, b) { return b.at - a.at; }).forEach(function (item) { ctx.src = ctx.src.slice(0, item.at) + item.text + ctx.src.slice(item.at); });
+}
+
 function flattenNestedStructs(src, messages)
 {
 	// ReShade rejects struct-valued fields. Flatten one level at a time, with
@@ -1399,6 +1453,7 @@ var TRANSFORM_STEPS = [
 	},
 	{ name: 'arrayConstructors', run: stepArrayConstructors },
 	{ name: 'nestedStructs', run: stepNestedStructs, after: ['structConstructors', 'arrayConstructors'], why: 'struct constructor helpers and array initializers must be visible to typed member rewrites' },
+	{ name: 'outParameters', run: stepOutParameters, after: ['typeNames', 'nestedStructs'], why: 'numeric types and flat struct fields are needed to initialize out parameters' },
 	{ name: 'arrayLength', run: stepArrayLength, after: ['arrayConstructors'], why: 'it counts the elements of the braced initialisers that step produces' },
 	{
 		name: 'matrixMul',
