@@ -44,5 +44,14 @@ check('all overloads remain available to specialized callers', overloads.include
 const explicit = 'float4 leaf(float2 p){return tex2Dgrad(iChannel0,p,float2(1.,0.),float2(0.,1.));}\nvoid mainImage(float2 p,out float4 c){for(int k=0;k<8;k++){c+=leaf(p);}}';
 check('explicit gradients do not require helper specialization', porter.rewriteLoopGradientTex(explicit, []) === explicit);
 check('running the gradient rewrite twice adds no more helpers', porter.rewriteLoopGradientTex(sampled, []) === sampled);
+check('dynamic array writes allow the compiler to unroll', count(hint('void f(){float a[4];for(int k=0;k<4;k++){a[k]=float(k);}}')) === 0);
+check('enclosing loops also allow dynamic array writes', count(hint('void f(){float a[4];for(int j=0;j<2;j++){for(int k=0;k<4;k++){a[k]=float(j+k);}}}')) === 0);
+check('array parameter writes allow unrolling', count(hint('void f(out float a[4]){for(int k=0;k<4;k++){a[k]=float(k);}}')) === 0);
+check('component writes within array elements allow unrolling', count(hint('void f(out float4 a[4]){for(int k=0;k<4;k++){a[k].xy=float2(k,k);}}')) === 0);
+check('array increments allow unrolling', count(hint('void f(){float a[4];for(int k=0;k<4;k++){a[k]++;}}')) === 0);
+check('unbraced array writes allow unrolling', count(hint('void f(){float a[4];for(int k=0;k<4;k++)a[k]=float(k);}')) === 0);
+check('writes in an else arm are included in the loop', count(hint('void f(){float a[4];for(int k=0;k<4;k++)if(k<2){}else{a[k]=float(k);}}')) === 0);
+check('unrelated loops keep their DX9 hint', count(hint('void f(){float a[4];for(int k=0;k<4;k++){a[k]=float(k);}float x=0.;for(int j=0;j<4;j++){x+=j;}}')) === 1);
+check('array reads keep the rolled-loop hint', count(hint('float f(float a[4]){float x=0.;for(int k=0;k<4;k++){x+=a[k];}return x;}')) === 1);
 console.log((total - bad) + '/' + total + ' loop tests OK');
 process.exit(bad ? 1 : 0);

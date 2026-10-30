@@ -1,6 +1,8 @@
 // Small GLSL idioms common in Shadertoy shaders. Each entry: [id, helpers (global code), body of mainImage].
 // Every one is valid GLSL ES 3.00 as Shadertoy accepts it; the porter must turn it into a compiling effect.
 module.exports = [
+	['dx9_array_parameter_write','void fill(out vec4 a[4]){for(int k=0;k<4;k++){a[k].xyz=vec3(float(k));a[k].w=1.;}}\n','vec4 a[4];fill(a);fragColor=a[0]+a[1]+a[2]+a[3];',{dx9Budget:512}],
+	['dx9_local_array_write','','float a[4];for(int k=0;k<4;k++){a[k]=float(k)*.125;}fragColor=vec4(a[0]+a[1]+a[2]+a[3]);',{dx9Budget:512}],
 	['loop_texture_helper','vec4 leaf(vec2 p){return texture(iChannel0,p);}\nvec4 middle(vec2 p){return leaf(p);}\n','vec4 v=middle(fragCoord);for(int k=0;k<8;k++){v+=middle(fragCoord+float(k));}fragColor=v;'],
 	['void_parameter_list','float base(void);\nfloat value(void){return base()+.25;}\nfloat base(void){return .5;}\n','fragColor=vec4(value());'],
 	['mixed_comment_delimiters','// /* disabled note\nvec3 helper(vec2 p){return vec3(p,.25);}\n/* real block */\n','fragColor=vec4(helper(fragCoord),1.);'],

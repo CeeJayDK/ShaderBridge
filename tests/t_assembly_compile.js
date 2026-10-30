@@ -8,6 +8,7 @@ const porter = require('./load_porter.js')();
 
 const image = 'void mainImage(out vec4 c,vec2 p) { c=vec4(gain(p.x)); }';
 const cases = require('./nested_struct_cases.js').concat([
+	{name:'array_write_loop',sources:['void fill(out vec4 a[4]){for(int k=0;k<4;k++){a[k].xyz=vec3(float(k));a[k].w=1.;}}\nvoid mainImage(out vec4 c,vec2 p){vec4 a[4];fill(a);bool ok=a[0].x==0.&&a[1].y==1.&&a[2].z==2.&&a[3].w==1.;c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}']},
 	{name:'loop_texture_helper',sources:['vec4 leaf(vec2 p){return texture(iChannel0,p);}\nvec4 middle(vec2 p){return leaf(p);}\nvoid mainImage(out vec4 c,vec2 p){vec2 uv=p/iResolution.xy;vec4 original=middle(uv);vec4 sum=vec4(0.);for(int k=0;k<8;k++){sum+=middle(uv);}vec4 expected=textureLod(iChannel0,uv,0.)*8.;bool ok=all(lessThan(abs(sum-expected),vec4(.001)))&&all(lessThan(abs(original-texture(iChannel0,uv)),vec4(.001)));c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}'],channels:[['backbuffer']]},
 	{name:'void_parameter_list',sources:['float base(void);\nfloat value(void){return base()+.25;}\nfloat base(void){return .5;}\nvoid mainImage(out vec4 c,vec2 p){c=value()==.75?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}']},
 	{name:'mixed_comment_delimiters',sources:Array(2).fill('// /* disabled note\nvec3 helper(vec2 p){return vec3(p,.25);}\n/* real block */\nvoid mainImage(out vec4 c,vec2 p){vec3 v=helper(vec2(.5,.75));bool ok=all(equal(v,vec3(.5,.75,.25)));c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}')},

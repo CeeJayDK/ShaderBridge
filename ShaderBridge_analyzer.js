@@ -322,7 +322,7 @@ function anScanTopLevel(an)
 				while (QUALS[txt(pk)]) { pk++; }
 				var ptype = resolveType(txt(pk));
 				var pname = txt(pk + 1);
-				if (isTypeName(ptype) && T(pk + 1) && T(pk + 1).type === 'ident') { params.push({ type: ptype, name: pname, tok: pk + 1 }); }
+				if (isTypeName(ptype) && T(pk + 1) && T(pk + 1).type === 'ident') { params.push({ type: ptype + (txt(pk + 2) === '[' ? '[]' : ''), name: pname, tok: pk + 1 }); }
 				// advance to next top-level comma
 				var pd = 0;
 				while (pj < pclose)

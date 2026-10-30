@@ -11,6 +11,10 @@ function check(label, ok, detail)
 	if (!ok) { bad++; console.log('FAIL', label, detail ? '\n' + detail : ''); }
 }
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const arrayParams = porter.analyzeSource('void fill(out float4 values[4], int k){values[k].x=1.;}');
+const arrayRoots = []; arrayParams.eachExpression(n => arrayRoots.push(n));
+check('array parameters retain their array type', arrayParams.functions.fill[0].params[0].type === 'float4[]');
+check('indexing an array parameter yields its element type', arrayRoots[0].left.base.type === 'float4');
 
 const castAnalysis=porter.analyzeSource('void f(){float3 v=(float3)0;float scalar=-(float)(1.+2.);float value=3.;float grouped=(value+2.)*3.;}');
 const castRoots=[];castAnalysis.eachExpression(n=>castRoots.push(n));

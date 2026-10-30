@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.68';
+var PORTER_VERSION = '3.0.69';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -1424,10 +1424,59 @@ function stepD3D9ForLoops(ctx)
 	{
 		return t.type !== 'ws' && t.type !== 'comment' && t.type !== 'placeholder' && t.type !== 'preproc';
 	});
+	// SM3 cannot address an array element as a writable register dynamically.
+	// FXC must unroll a loop containing such a write; [loop] would forbid that.
+	var analysis = analyzeSource(ctx.src), arrayWrites = [];
+	function visit(node)
+	{
+		var target = node.kind === 'assign' ? node.left
+			: node.kind === 'postinc' || (node.kind === 'unary' && /^(\+\+|--)$/.test(node.op)) ? node.child : null;
+		while (target)
+		{
+			if (target.kind === 'index' && /\[\]$/.test(target.base.type || '') && target.index.kind !== 'num') { arrayWrites.push(analysis.charStart(node)); break; }
+			target = target.base || (target.kind === 'paren' ? target.child : null);
+		}
+		exprChildren(node).forEach(visit);
+	}
+	analysis.eachExpression(visit);
+	function text(i) { return significant[i] ? significant[i].text : ''; }
+	function close(i)
+	{
+		var right = { '(': ')', '[': ']', '{': '}' }[text(i)], depth = 1;
+		for (var j = i + 1; j < significant.length; j++)
+		{
+			if (text(j) === text(i)) { depth++; }
+			else if (text(j) === right && --depth === 0) { return j + 1; }
+		}
+		return significant.length;
+	}
+	function statementEnd(i)
+	{
+		while (text(i) === '[') { i = close(i); }
+		if (text(i) === '{') { return close(i); }
+		if (/^(for|while|switch|if)$/.test(text(i)) && text(i + 1) === '(')
+		{
+			var conditional = text(i) === 'if', end = statementEnd(close(i + 1));
+			return conditional && text(end) === 'else' ? statementEnd(end + 1) : end;
+		}
+		if (text(i) === 'do')
+		{
+			var tail = statementEnd(i + 1);
+			return text(tail) === 'while' && text(tail + 1) === '(' ? close(tail + 1) + 1 : tail;
+		}
+		for (; i < significant.length; i++)
+		{
+			if (text(i) === '(' || text(i) === '[') { i = close(i) - 1; }
+			else if (text(i) === ';') { return i + 1; }
+		}
+		return i;
+	}
 	var insertions = [];
 	significant.forEach(function (t, i)
 	{
 		if (t.type !== 'ident' || t.text !== 'for' || !significant[i + 1] || significant[i + 1].text !== '(') { return; }
+		var end = statementEnd(i), endOffset = end < significant.length ? significant[end].start : ctx.src.length;
+		if (arrayWrites.some(function (at) { return at >= t.start && at < endOffset; })) { return; }
 		// SM3's rolled-loop counter is limited to 255 iterations. Let the compiler unroll
 		// a larger, purely constant loop instead of giving it contradictory instructions.
 		var fixedLoop = /^for\s*\(\s*(?:int|uint|float)\s+(\w+)\s*=\s*0\s*;\s*\1\s*(<|<=)\s*(\d+)\s*;\s*(?:\1\s*\+\+|\+\+\s*\1)\s*\)/.exec(ctx.src.slice(t.start));
