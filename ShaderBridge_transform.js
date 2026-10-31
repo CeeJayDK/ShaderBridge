@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.71';
+var PORTER_VERSION = '3.0.72';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -958,6 +958,35 @@ function stepVolumeLookups(ctx)
 	}).src.slice(prefix.length);
 }
 
+function stepConditionalStatements(ctx)
+{
+	// ReShade evaluates both ternary arms. Statement-level GLSL conditionals
+	// need real branches to keep assignments, increments and calls conditional.
+	var A = analyzeSource(ctx.src), edits = [], seen = {};
+	function branches(node)
+	{
+		if (node.kind === 'ternary') { return true; }
+		if (node.kind === 'paren') { return branches(node.child); }
+		if (node.kind === 'sequence') { return node.items.some(branches); }
+		return node.kind === 'assign' && branches(node.right);
+	}
+	function emit(node, prefix)
+	{
+		if (node.kind === 'paren') { return emit(node.child, prefix); }
+		if (node.kind === 'ternary') { return 'if (' + A.textOf(node.cond) + ')\n{\n' + emit(node.a, prefix) + '\n}\nelse\n{\n' + emit(node.b, prefix) + '\n}'; }
+		if (node.kind === 'sequence') { return node.items.map(function (item, i) { return emit(item, i === node.items.length - 1 ? prefix : ''); }).join('\n'); }
+		if (!prefix && node.kind === 'assign' && branches(node.right)) { return emit(node.right, A.textOf(node.left) + ' ' + node.op + ' '); }
+		return prefix ? prefix + '(' + A.textOf(node) + ');' : A.textOf(node) + ';';
+	}
+	A.eachExpression(function (node, statement)
+	{
+		if (!statement || seen[statement.from] || !statement.roots.some(branches)) { return; }
+		seen[statement.from] = true;
+		edits.push({ start: A.tokens[A.sig[statement.from]].start, end: A.tokens[A.sig[statement.to]].end, text: '{\n' + statement.roots.map(function (root) { return emit(root, ''); }).join('\n') + '\n}' });
+	});
+	edits.sort(function (a, b) { return b.start - a.start; }).forEach(function (edit) { ctx.src = ctx.src.slice(0, edit.start) + edit.text + ctx.src.slice(edit.end); });
+}
+
 function stepTextureGrad(ctx)
 {
 	var s = ctx.src;
@@ -1679,10 +1708,11 @@ var TRANSFORM_STEPS = [
 	{ name: 'outParameters', run: stepOutParameters, after: ['typeNames', 'nestedStructs'], why: 'numeric types and flat struct fields are needed to initialize out parameters' },
 	{ name: 'arrayLength', run: stepArrayLength, after: ['arrayConstructors'], why: 'it counts the elements of the braced initialisers that step produces' },
 	{ name: 'volumeLookups', run: stepVolumeLookups, after: ['typeNames', 'compatibilityMacros', 'arrayConstructors'], why: '3D sampler parameters and macro aliases must be visible before generic 2D lookup rewriting' },
+	{ name: 'conditionalStatements', run: stepConditionalStatements, after: ['typeNames', 'compatibilityMacros', 'arrayConstructors'], why: 'conditional comma arms need typed expressions and expanded macro bodies' },
 	{
 		name: 'matrixMul',
 		run: stepMatrixMul,
-		after: ['typeNames', 'arrayConstructors'],
+		after: ['typeNames', 'arrayConstructors', 'conditionalStatements'],
 		why: 'the expression tree reads HLSL type names and cannot read type[N](...)'
 	},
 	{

@@ -8,6 +8,8 @@ const porter = require('./load_porter.js')();
 
 const image = 'void mainImage(out vec4 c,vec2 p) { c=vec4(gain(p.x)); }';
 const cases = require('./nested_struct_cases.js').concat([
+	{name:'conditional_statement_paths',sources:['void mainImage(out vec4 c,vec2 p){bool selected=p.x<iResolution.x*.5;float count=0.;vec2 v=vec2(1.,2.);for(int k=0;k<3;k++)count+=1.,k<2?count+=2.,v*=mat2(2.,0.,0.,2.):v,count+=1.;float value=0.;value=selected?count+=3.,5.:(count+=4.,7.);bool ok=all(lessThan(abs(v-vec2(4.,8.)),vec2(.001)))&&count==(selected?13.:14.)&&value==(selected?5.:7.);c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}']},
+	{name:'conditional_comma_matrix',sources:['void mainImage(out vec4 c,vec2 p){bool selected=p.x<iResolution.x*.5;vec2 q=vec2(1.,2.);float count=0.;selected?count+=1.,q*=mat2(1.,2.,3.,4.):q;float value=0.;selected?value=2.:value=3.;vec2 expected=selected?vec2(5.,11.):vec2(1.,2.);bool ok=all(lessThan(abs(q-expected),vec2(.001)))&&count==(selected?1.:0.)&&value==(selected?2.:3.);c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}']},
 	{name:'generated_volume_feedback',ids:['volumeA','image'],channels:[['volumeA'],['volumeA']],selfRefs:[[0],[]],shaderModels:['50'],sources:[
 		'void mainVolume(out vec4 c,vec3 p){ivec3 q=ivec3(p);float count=iFrame==0?1.:texelFetch(iChannel0,q,0).w+1.;c=vec4(p,count);}',
 		'void mainImage(out vec4 c,vec2 p){ivec3 size=textureSize(iChannel0,0);ivec3 q=ivec3(int(p.x)%size.x,int(p.y)%size.y,(int(p.x)/size.x)%size.z);vec4 v=texelFetch(iChannel0,q,0);bool ok=all(lessThan(abs(v.xyz-(vec3(q)+.5)),vec3(.001)))&&abs(v.w-float(iFrame+1))<.001&&all(equal(iChannelResolution[0],vec3(size)));c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}'

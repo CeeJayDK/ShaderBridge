@@ -11,6 +11,13 @@ function check(label, ok, detail)
 	if (!ok) { bad++; console.log('FAIL', label, detail ? '\n' + detail : ''); }
 }
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const conditionalComma=porter.analyzeSource('void f(bool choose){float x=0.;float y=0.;float value=choose?x=1.,y=2.:x=3.;float keep=x+y;}');
+const conditionalRoots=[];conditionalComma.eachExpression(n=>conditionalRoots.push(n));
+check('a conditional middle arm accepts a comma sequence',conditionalRoots[2].kind==='ternary'&&conditionalRoots[2].a.kind==='sequence'&&conditionalRoots[2].a.items.length===2);
+check('a comma arm has the type of its final expression',conditionalRoots[2].a.type==='float');
+check('the false conditional arm accepts an assignment',conditionalRoots[2].b.kind==='assign'&&conditionalComma.textOf(conditionalRoots[2].b)==='x=3.');
+check('analysis continues after a conditional comma expression',conditionalRoots[3].kind==='binary'&&conditionalComma.textOf(conditionalRoots[3])==='x+y');
+check('conditional comma expressions do not count as parse failures',conditionalComma.parseFailures===0);
 const arrayParams = porter.analyzeSource('void fill(out float4 values[4], int k){values[k].x=1.;}');
 const arrayRoots = []; arrayParams.eachExpression(n => arrayRoots.push(n));
 check('array parameters retain their array type', arrayParams.functions.fill[0].params[0].type === 'float4[]');

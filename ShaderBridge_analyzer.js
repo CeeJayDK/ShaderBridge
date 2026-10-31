@@ -819,8 +819,19 @@ function anAddParser(an)
 			if (txt(c.next) === '?')
 			{
 				var a = parseAssign(c.next + 1);
+				if (a && txt(a.next) === ',')
+				{
+					var items = [a.node];
+					while (txt(a.next) === ',')
+					{
+						a = parseAssign(a.next + 1);
+						if (!a) { return null; }
+						items.push(a.node);
+					}
+					a.node = { kind: 'sequence', from: items[0].from, to: a.node.to, type: a.node.type, items: items };
+				}
 				if (!a || txt(a.next) !== ':') { return null; }
-				var b = parseTernary(a.next + 1);
+				var b = parseAssign(a.next + 1);
 				if (!b) { return null; }
 				var ty = a.node.type || b.node.type;
 				return { node: { kind: 'ternary', from: c.node.from, to: b.node.to, type: ty, cond: c.node, a: a.node, b: b.node }, next: b.next };
@@ -874,18 +885,22 @@ function anAddWalker(an)
 			}
 			return end;
 		}
-		function exprList(j, end)
+		function exprList(j, end, statement)
 		{
 			// one or more comma-separated expressions starting at j; returns index after them
+			var roots = [], from = j;
 			while (j < end)
 			{
 				var r = A.parseExpr(j);
-				if (!r) { A.parseFailures++; return skipToSemicolon(j, end); }
-				cb(r.node);
+				if (!r) { A.parseFailures++; roots.forEach(function (node) { cb(node); }); return skipToSemicolon(j, end); }
+				if (statement) { roots.push(r.node); }
+				else { cb(r.node); }
 				j = r.next;
 				if (txt(j) === ',') { j++; continue; }
 				break;
 			}
+			var context = statement && txt(j) === ';' ? { from: from, to: j, roots: roots } : null;
+			roots.forEach(function (node) { cb(node, context); });
 			return j;
 		}
 		function declList(q, end)
@@ -966,7 +981,7 @@ function anAddWalker(an)
 					j = declList(q2 + 1, end);
 					continue;
 				}
-				j = exprList(j, end);
+				j = exprList(j, end, true);
 				if (j < end && txt(j) !== ';' && txt(j) !== '}' && txt(j) !== '{') { A.parseFailures++; j = skipToSemicolon(j, end); }
 			}
 		}

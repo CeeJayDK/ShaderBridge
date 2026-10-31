@@ -1,6 +1,8 @@
 // Small GLSL idioms common in Shadertoy shaders. Each entry: [id, helpers (global code), body of mainImage].
 // Every one is valid GLSL ES 3.00 as Shadertoy accepts it; the porter must turn it into a compiling effect.
 module.exports = [
+	['conditional_comma_matrix','','vec2 q=vec2(1.,2.);float count=0.;bool selected=fragCoord.x<32.;selected?count+=1.,q*=mat2(1.,2.,3.,4.):q;fragColor=vec4(q,count,1.);'],
+	['conditional_false_assignment','','float value=0.;bool selected=fragCoord.x<32.;selected?value=2.:value=3.;fragColor=vec4(value);'],
 	['array_type_declarators','','vec4[2] a=vec4[2](vec4(.25),vec4(.5)),b=vec4[2](vec4(.125),vec4(.125));fragColor=a[0]+a[1]+b[0]+b[1];'],
 	['array_type_parameter','void fill(out float[3] a,float value){for(int k=0;k<3;k++){a[k]=value*float(k);}}\n','float[3] values;fill(values,.25);fragColor=vec4(values[0]+values[1]+values[2]);',{dx9Budget:512}],
 	['dx9_array_parameter_write','void fill(out vec4 a[4]){for(int k=0;k<4;k++){a[k].xyz=vec3(float(k));a[k].w=1.;}}\n','vec4 a[4];fill(a);fragColor=a[0]+a[1]+a[2]+a[3];',{dx9Budget:512}],
