@@ -134,6 +134,7 @@ module.exports = [
 	['glob_const_call', 'const float TAU = 6.28318530718;\nconst float HALF = TAU * 0.5;\nconst vec2 R = vec2(cos(1.), sin(1.));\n', 'fragColor = vec4(HALF, R, 1.);'],
 	['glob_mutable', 'vec2 g = vec2(1., 2.);\nfloat counter;\n', 'g.x += fragCoord.x; counter = g.x * 2.; fragColor = vec4(g, counter, 1.);'],
 	['glob_struct_array', 'struct L { vec3 c; float r; };\nL lights[2];\n', 'lights[0] = L(vec3(1.), 2.); lights[1] = L(vec3(0.), 3.); fragColor = vec4(lights[0].c * lights[1].r, 1.);'],
+	...[0,1].map(mode=>['conditional_expression_calls_'+mode,'#define MODE '+mode+'\nvec4 choose(vec2 p){return p.x>0.\n#if MODE\n?vec4(length(p))\n#else\n?vec4(p,vec2(1.))\n#endif\n:vec4(0.);}\n','fragColor=choose(fragCoord);']),
 	['glob_struct_ctor', 'struct Ray { vec3 o; vec3 d; };\n', 'Ray r = Ray(vec3(0.), normalize(vec3(fragCoord, 1.))); fragColor = vec4(r.d, 1.);'],
 	['macro_func', '#define SQ(x) ((x) * (x))\n#define LEN2(v) dot(v, v)\n', 'fragColor = vec4(SQ(fragCoord.x) + LEN2(fragCoord));'],
 	['macro_vec', '#define COL vec3(1., 0.5, 0.2)\n#define PI 3.14159265\n', 'fragColor = vec4(COL * sin(PI * fragCoord.x * 0.01), 1.);'],

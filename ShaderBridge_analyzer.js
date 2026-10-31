@@ -650,7 +650,7 @@ function anAddParser(an)
 
 	// Parse an expression starting at sig index p. Returns { node, next } where next is the sig
 	// index after the expression, or null on failure. node = { kind, from, to, type, ... }.
-	A.parseExpr = function (p)
+	A.parseExpr = function (p, callOnly)
 	{
 		var noComma = true;
 
@@ -856,7 +856,8 @@ function anAddParser(an)
 			return l;
 		}
 
-		var res = parseAssign(p);
+		// Recovery can read a complete call without consuming the operators after it.
+		var res = callOnly ? primary(p) : parseAssign(p);
 		return res;
 	};
 }
@@ -875,6 +876,26 @@ function anAddWalker(an)
 	A.parseFailures = 0;
 	A.eachExpression = function (cb)
 	{
+		// Preprocessor alternatives inside an expression do not form one expression
+		// when read together. Still visit self-contained calls in that failed range:
+		// their arguments retain the ordinary scope/type lookup, and no directive is
+		// swallowed by a rewrite. Keep the parse failure visible to callers.
+		function recoverCalls(from, end)
+		{
+			if (!T(from) || !T(end)) { return; }
+			var directives = A.tokens.slice(an.sig[from], an.sig[end]).filter(function (t) { return t.type === 'preproc'; });
+			if (!directives.length) { return; }
+			for (var i = from; i < end; i++)
+			{
+				if (T(i).type !== 'ident' || txt(i + 1) !== '(') { continue; }
+				var close = matchClose(i + 1, '(', ')');
+				if (close < 0 || close >= end || directives.some(function (t) { return t.start > T(i).start && t.start < T(close).end; })) { continue; }
+				var r = A.parseExpr(i, true);
+				if (!r || r.node.kind !== 'call' || r.next !== close + 1) { continue; }
+				cb(r.node);
+				i = close;
+			}
+		}
 		function skipToSemicolon(j, end)
 		{
 			var d = 0;
@@ -895,7 +916,14 @@ function anAddWalker(an)
 			while (j < end)
 			{
 				var r = A.parseExpr(j);
-				if (!r) { A.parseFailures++; roots.forEach(function (node) { cb(node); }); return skipToSemicolon(j, end); }
+				if (!r)
+				{
+					A.parseFailures++;
+					roots.forEach(function (node) { cb(node); });
+					var stop = skipToSemicolon(j, end);
+					recoverCalls(j, stop);
+					return stop;
+				}
 				if (statement) { roots.push(r.node); }
 				else { cb(r.node); }
 				j = r.next;
@@ -917,7 +945,13 @@ function anAddWalker(an)
 				if (txt(q) === '=')
 				{
 					var r = A.parseExpr(q + 1);
-					if (!r) { A.parseFailures++; return skipToSemicolon(q, end); }
+					if (!r)
+					{
+						A.parseFailures++;
+						var stop = skipToSemicolon(q, end);
+						recoverCalls(q + 1, stop);
+						return stop;
+					}
 					cb(r.node);
 					q = r.next;
 				}
@@ -992,7 +1026,7 @@ function anAddWalker(an)
 		A.globalInits.forEach(function (at)
 		{
 			var r = A.parseExpr(at);
-			if (!r) { A.parseFailures++; return; }
+			if (!r) { A.parseFailures++; recoverCalls(at, skipToSemicolon(at, an.nSig)); return; }
 			cb(r.node);
 		});
 		Object.keys(A.functions).forEach(function (name)

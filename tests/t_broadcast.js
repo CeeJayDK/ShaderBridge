@@ -53,6 +53,20 @@ const mainOut = porter.rewriteBroadcastConstructors(mainSrc, []);
 check('fragCoord conversion is not broadcast', /int2 p = int2\(fragCoord\);/.test(mainOut), true);
 check('fragCoord.x is broadcast', /float3\(fragCoord\.x, fragCoord\.x, fragCoord\.x\)/.test(mainOut), true);
 
+// Conditional expression fragments still contain complete, typed calls. Keep all
+// alternatives selectable and preserve the failure warning for the outer expression.
+const conditional='float4 f(float x,float2 v){return x>0.\n#if MODE\n?float4(length(v))\n#else\n?float4(x)\n#endif\n:float4(v,0.,1.);}';
+const conditionalMessages=[];
+const conditionalOut=porter.rewriteBroadcastConstructors(conditional,conditionalMessages);
+check('conditional return: scalar calls in both alternatives are expanded',conditionalOut.includes('float4(length(v), length(v), length(v), length(v))')&&conditionalOut.includes('float4(x, x, x, x)'),true);
+check('conditional return: directives and nonbroadcast calls survive',conditionalOut.includes('#if MODE')&&conditionalOut.includes('#else')&&conditionalOut.includes('#endif')&&conditionalOut.includes('float4(v,0.,1.)'),true);
+check('conditional return: an incomplete outer expression is still reported',conditionalMessages.some(m=>/could not be analysed/.test(m.text)),true);
+check('conditional return: rewriting is idempotent',porter.rewriteBroadcastConstructors(conditionalOut,[])===conditionalOut,true);
+const initializer=conditional.replace('return x>0.','float4 value=x>0.').replace(':float4(v,0.,1.);}',':float4(v,0.,1.);return value;}');
+check('conditional local initializer: arguments use the function scope',porter.rewriteBroadcastConstructors(initializer,[]).includes('float4(x, x, x, x)'),true);
+const splitCall='float4 f(float x){return x>0.\n#if MODE\n?float4(\n#else\n?float4(\n#endif\nx):float4(0.);}';
+check('calls whose arguments cross directives are left untouched',porter.rewriteBroadcastConstructors(splitCall,[]).split(':float4')[0]===splitCall.split(':float4')[0],true);
+
 // unknown types are left alone and reported
 const messages = [];
 check('unknown argument left alone', run('return float4(float3(mystery), 1.0);', messages), 'return float4(float3(mystery), 1.0);');
