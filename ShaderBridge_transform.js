@@ -733,6 +733,7 @@ function stepCompatibilityMacros(ctx)
 		var bodyTokens = tokenizeSource(macro.body).filter(function (t) { return t.type !== 'ws'; });
 		return bodyTokens.some(function (t, i)
 		{
+			if (t.text === '^^') { return true; }
 			var constructorOrLookup = /^(?:(?:float|int|uint|bool)[234]|texture\w*|texelFetch\w*|tex[23]D\w*|texCUBE\w*)$/.test(t.text);
 			var rectangular = /^float([234])x([234])$/.exec(t.text);
 			return t.type === 'ident' && (((constructorOrLookup || (rectangular && rectangular[1] !== rectangular[2])) && bodyTokens[i + 1] && bodyTokens[i + 1].text === '(') || needsExpansion(t.text, seen.concat(name)));
@@ -899,6 +900,18 @@ function stepArrayLength(ctx)
 	// array.length() → the size of the array
 	s = rewriteArrayLength(s, messages);
 	ctx.src = s;
+}
+
+function stepLogicalXor(ctx)
+{
+	if (ctx.src.indexOf('^^') < 0) { return; }
+	ctx.src = rewriteExpressions(ctx.src, function (node, render)
+	{
+		if (node.kind !== 'binary' || node.op !== '^^') { return null; }
+		// GLSL XOR takes scalar booleans and evaluates both operands. Parenthesize
+		// each operand because != binds more tightly than GLSL's logical XOR.
+		return '((' + render(node.left) + ') != (' + render(node.right) + '))';
+	}).src;
 }
 
 function stepMatrixMul(ctx)
@@ -1857,6 +1870,7 @@ var TRANSFORM_STEPS = [
 	{ name: 'arrayLength', run: stepArrayLength, after: ['arrayConstructors'], why: 'it counts the elements of the braced initialisers that step produces' },
 	{ name: 'volumeLookups', run: stepVolumeLookups, after: ['typeNames', 'compatibilityMacros', 'arrayConstructors'], why: '3D sampler parameters and macro aliases must be visible before generic 2D lookup rewriting' },
 	{ name: 'conditionalStatements', run: stepConditionalStatements, after: ['typeNames', 'compatibilityMacros', 'arrayConstructors'], why: 'conditional comma arms need typed expressions and expanded macro bodies' },
+	{ name: 'logicalXor', run: stepLogicalXor, after: ['typeNames', 'compatibilityMacros', 'arrayConstructors'], why: 'logical XOR needs typed expressions and macro bodies exposed before lowering to boolean inequality' },
 	{
 		name: 'matrixMul',
 		run: stepMatrixMul,

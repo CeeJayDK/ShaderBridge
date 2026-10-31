@@ -82,7 +82,7 @@ function anMulType(a, b)
 // GLSL operator '*' on GLSL-origin types (matrix dimensions retain transposed storage).
 function anBinaryType(op, lt, rt)
 {
-	if (op === '&&' || op === '||') { return 'bool'; }
+	if (op === '&&' || op === '||' || op === '^^') { return 'bool'; }
 	var pl = lt && anParseType(lt), pr = rt && anParseType(rt);
 	if (op === '==' || op === '!=' || op === '<' || op === '>' || op === '<=' || op === '>=')
 	{
@@ -645,7 +645,7 @@ function anAddParser(an)
 	var nSig = an.nSig;
 	var macroCallType = an.macroCallType;
 	var objectMacroType = an.objectMacroType;
-	var BIN = { '||': 3, '&&': 4, '|': 5, '^': 6, '&': 7, '==': 8, '!=': 8, '<': 9, '>': 9, '<=': 9, '>=': 9, '<<': 10, '>>': 10, '+': 11, '-': 11, '*': 12, '/': 12, '%': 12 };
+	var BIN = { '||': 3, '^^': 4, '&&': 5, '|': 6, '^': 7, '&': 8, '==': 9, '!=': 9, '<': 10, '>': 10, '<=': 10, '>=': 10, '<<': 11, '>>': 11, '+': 12, '-': 12, '*': 13, '/': 13, '%': 13 };
 	var ASSIGN = { '=': 1, '+=': 1, '-=': 1, '*=': 1, '/=': 1, '%=': 1, '&=': 1, '|=': 1, '^=': 1, '<<=': 1, '>>=': 1 };
 
 	// Parse an expression starting at sig index p. Returns { node, next } where next is the sig

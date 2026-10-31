@@ -166,6 +166,7 @@ const EXAMPLES = {
 	conditionalLoopBodies: 'void mainImage(out vec4 c,vec2 p){\n#if CHOICE\nfor(int i=0;i<3;i++){\n#else\nfor(int i=0;i<2;i++){\n#endif\nc+=vec4(1.);}\n}',
 	fallbackReturns: 'float choose(float x){if(x>0.)return x;}void mainImage(out vec4 c,vec2 p){c=vec4(choose(p.x));}',
 	conditionalStatements: 'void mainImage(out vec4 c,vec2 p){float value=0.;p.x<1.?value=2.:value=3.;c=vec4(value);}',
+	logicalXor: 'void mainImage(out vec4 c,vec2 p){c=vec4(float(p.x>0. ^^ p.y<1.));}',
 	volumeLookups: 'vec4 readVolume(sampler3D data,ivec3 p){return texelFetch(data,p,0);}void mainImage(out vec4 c,vec2 p){c=vec4(1.);}',
 	arrayDeclarators: 'void mainImage(out vec4 c,vec2 p){float[2] a=float[2](.25,.75);c=vec4(a[0]+a[1]);}',
 	voidParameters: 'float value(void){return .5;}void mainImage(out vec4 c,vec2 p){c=vec4(value());}',

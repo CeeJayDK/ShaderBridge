@@ -14,7 +14,7 @@
 // Operators, longest match first: three characters, then two, then one.
 var LEXER_PUNCT3 = { '<<=': true, '>>=': true };
 var LEXER_PUNCT2 = {
-	'&&': true, '||': true, '==': true, '!=': true, '<=': true, '>=': true, '+=': true, '-=': true, '*=': true, '/=': true,
+	'&&': true, '||': true, '^^': true, '==': true, '!=': true, '<=': true, '>=': true, '+=': true, '-=': true, '*=': true, '/=': true,
 	'%=': true, '&=': true, '|=': true, '^=': true, '<<': true, '>>': true, '++': true, '--': true
 };
 var LEXER_PUNCT1 = '+-*/%&|^~!<>=?:;,.()[]{}';

@@ -18,6 +18,17 @@ function port(helpers, body)
 }
 const has = (r, text) => r.out.indexOf(text) >= 0;
 function staticGlobals(src){const ctx={src};porter.stepStaticGlobals(ctx);return ctx.src;}
+function logicalXor(expr){const ctx={src:'bool f(bool a,bool b,bool c){return '+expr+';}',messages:[]};porter.stepLogicalXor(ctx);return ctx.src;}
+check('logical XOR has one lexer token',porter.tokenizeSource('a^^b').filter(t=>t.text==='^^').length===1);
+check('logical XOR operands retain relational precedence',logicalXor('a==b ^^ b==c').includes('((a==b) != (b==c))'));
+check('logical AND binds more tightly than XOR',logicalXor('a ^^ b && c').includes('((a) != (b && c))'));
+check('logical OR binds less tightly than XOR',logicalXor('a || b ^^ c').includes('a || ((b) != (c))'));
+check('logical XOR is left associative',logicalXor('a ^^ b ^^ c').includes('((((a) != (b))) != (c))'));
+check('logical XOR operands appear only once',logicalXor('left() ^^ right()').match(/left\(\)/g).length===1&&logicalXor('left() ^^ right()').match(/right\(\)/g).length===1);
+check('bitwise XOR remains a bitwise operator',logicalXor('(1^2)>0')==='bool f(bool a,bool b,bool c){return (1^2)>0;}');
+const xorMacro=port('#define DIFFERENT(a,b) ((a) ^^ (b))\n','fragColor=vec4(float(DIFFERENT(fragCoord.x>0.,fragCoord.y>0.)));');
+check('logical XOR macros are expanded for typed lowering',!porter.tokenizeSource(xorMacro.out).some(t=>t.type!=='preproc'&&t.text==='^^'),xorMacro.out);
+check('logical XOR lowering is idempotent',logicalXor('a ^^ b')===logicalXor('((a) != (b))'));
 check('macro aliases are accepted as mutable global types',staticGlobals('#define V float3\nV value;').includes('static V value;'));
 check('globals following a function on the same line are static',staticGlobals('float f(){return 1.;}float value;').includes('}static float value;'));
 check('explicit uniforms retain their storage',staticGlobals('uniform float gain;')==='uniform float gain;');
