@@ -6,7 +6,15 @@ var HELPER_SOURCE =
 	"// ── Intrinsic remaps ──\n"
 	+ "\n"
 	+ "// GLSL mod(x, y) floors toward -inf; HLSL fmod truncates toward zero.\n"
-	+ "#define mod(x, y) ((x) - (y) * floor((x) / (y)))\n"
+	+ "// Functions evaluate each argument once, including increments and calls.\n"
+	+ [1, 2, 3, 4].map(function (n)
+	{
+		var type = n === 1 ? 'float' : 'float' + n;
+		return (n === 1 ? [type] : [type, 'float']).map(function (divisor)
+		{
+			return type + ' mod(' + type + ' x, ' + divisor + ' y)\n{\n\treturn x - y * floor(x / y);\n}\n';
+		}).join('\n');
+	}).join('\n')
 	+ "\n";
 
 

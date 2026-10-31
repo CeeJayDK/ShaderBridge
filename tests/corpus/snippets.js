@@ -74,6 +74,7 @@ module.exports = [
 	['cmp_mix_bvec', '', 'vec3 c = mix(vec3(1.), vec3(0.), bvec3(fragCoord.x > 5., false, true)); fragColor = vec4(c, 1.);'],
 	// ── math builtins
 	['fn_mod_neg', '', 'vec2 p = mod(fragCoord - 100., vec2(32.)); float q = mod(-fragCoord.x, 7.); fragColor = vec4(p, q, 1.);'],
+	['fn_mod_side_effects', 'float calls;float take(){calls+=1.;return -5.5;}\n', 'calls=0.;vec3 v=vec3(2.,3.,4.);float value=mod(take(),2.);vec3 r=mod(--v,2.);fragColor=vec4(r,value+calls);'],
 	['fn_min_max_mixed', '', 'vec3 a = min(vec3(1., 2., 3.), 1.5); vec3 b = max(0.5, vec3(1., 2., 3.)); fragColor = vec4(a + b, 1.);'],
 	['fn_clamp_vec_scalar', '', 'vec3 c = clamp(vec3(fragCoord, 1.), 0.2, 0.8); fragColor = vec4(c, 1.);'],
 	['fn_pow_vec', '', 'vec3 c = pow(vec3(fragCoord / 100., 0.5), vec3(2.2)); vec3 d = pow(c, vec3(1. / 2.2)); fragColor = vec4(d, 1.);'],
