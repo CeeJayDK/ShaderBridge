@@ -2,14 +2,14 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.70';
+var PORTER_VERSION = '3.0.71';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
 // ═════════════════════════════════════════════════════════════════════════════
 
 function analyzeShader(src, messages) {
-	if (!/\b(?:mainImage|mainCubemap)\b/.test(src)) {
+	if (!/\b(?:mainImage|mainCubemap|mainVolume)\b/.test(src)) {
 		messages.push({ level: 'error', text: 'No mainImage() found. Is this an Image tab shader?' });
 	}
 	if (/\bmainSound\s*\(/.test(src)) {
@@ -923,6 +923,41 @@ function stepTextureCalls(ctx)
 	ctx.src = s;
 }
 
+function stepVolumeLookups(ctx)
+{
+	var names = (ctx.options && ctx.options.volumeSamplers) || [];
+	if (!names.length && !/\bsampler3D\b/.test(ctx.src)) { return; }
+	var biasWarned = false;
+	var prefix = names.map(function (name) { return 'sampler3D ' + name + ';\n'; }).join('');
+	ctx.src = rewriteExpressions(prefix + ctx.src, function (node, render)
+	{
+		if (node.kind !== 'call' || !node.args.length) { return null; }
+		var sampler = node.args[0];
+		if (sampler.type !== 'sampler3D' && !(sampler.kind === 'ident' && names.indexOf(sampler.name) !== -1)) { return null; }
+		var args = node.args.map(render), name = node.name;
+		if (name === 'textureSize') { return 'tex3Dsize(' + args.join(', ') + ')'; }
+		if (name === 'texelFetch') { return 'tex3Dfetch(' + args.join(', ') + ')'; }
+		if (name === 'texelFetchOffset') { return 'tex3Dfetch(' + args[0] + ', (' + args[1] + ' + ' + args[3] + '), ' + args[2] + ')'; }
+		if (name === 'textureLodOffset' || name === 'textureGradOffset')
+		{
+			// ReShade 6.8 declares/generates a two-component offset for these 3D
+			// overloads. Reject them explicitly instead of truncating the Z offset.
+			ctx.messages.push({ level: 'error', text: name + ' on a 3D sampler needs a manual rewrite: ReShade 6.8 does not correctly compile its three-component offset.' });
+			return 'ST_unsupported_' + name + '(' + args.join(', ') + ')';
+		}
+		if (name === 'textureGrad') { return 'tex3Dgrad(' + args.join(', ') + ')'; }
+		if (name === 'textureLod') { return 'tex3Dlod(' + args[0] + ', float4(' + args[1] + ', ' + args[2] + '))'; }
+		if (name === 'texture' || name === 'textureOffset')
+		{
+			var offset = name === 'textureOffset' ? args[2] : null, bias = args[name === 'textureOffset' ? 3 : 2];
+			if (bias && !biasWarned) { biasWarned = true; ctx.messages.push({ level: 'warn', text: 'A volume texture lookup with mip bias uses that bias as an explicit mip level. Review its filtering manually.' }); }
+			if ((ctx.options && ctx.options.volumePass) || bias) { return 'tex3Dlod(' + args[0] + ', float4(' + args[1] + ', ' + (bias || '0.0') + ')' + (offset ? ', ' + offset : '') + ')'; }
+			return 'tex3D(' + args[0] + ', ' + args[1] + (offset ? ', ' + offset : '') + ')';
+		}
+		return null;
+	}).src.slice(prefix.length);
+}
+
 function stepTextureGrad(ctx)
 {
 	var s = ctx.src;
@@ -1092,6 +1127,16 @@ function stepLoopGradientTex(ctx)
 {
 	var s = ctx.src;
 	var messages = ctx.messages;
+	if (ctx.options && ctx.options.volumePass)
+	{
+		// Compute shaders have no implicit screen-space texture derivatives.
+		s = rewriteExpressions(s, function (node, render)
+		{
+			if (node.kind !== 'call' || (node.name !== 'tex2D' && node.name !== 'tex3D')) { return null; }
+			var args = node.args.map(render);
+			return node.name + 'lod(' + args[0] + ', float4(' + args[1] + (node.name === 'tex2D' ? ', 0.0' : '') + ', 0.0)' + (args[2] ? ', ' + args[2] : '') + ')';
+		}).src;
+	}
 	// ── Rewrite gradient texture instructions inside loops (see rewriteLoopGradientTex) ──
 	s = rewriteLoopGradientTex(s, messages);
 	ctx.src = s;
@@ -1633,6 +1678,7 @@ var TRANSFORM_STEPS = [
 	{ name: 'nestedStructs', run: stepNestedStructs, after: ['structConstructors', 'arrayConstructors'], why: 'struct constructor helpers and array initializers must be visible to typed member rewrites' },
 	{ name: 'outParameters', run: stepOutParameters, after: ['typeNames', 'nestedStructs'], why: 'numeric types and flat struct fields are needed to initialize out parameters' },
 	{ name: 'arrayLength', run: stepArrayLength, after: ['arrayConstructors'], why: 'it counts the elements of the braced initialisers that step produces' },
+	{ name: 'volumeLookups', run: stepVolumeLookups, after: ['typeNames', 'compatibilityMacros', 'arrayConstructors'], why: '3D sampler parameters and macro aliases must be visible before generic 2D lookup rewriting' },
 	{
 		name: 'matrixMul',
 		run: stepMatrixMul,
@@ -1660,7 +1706,7 @@ var TRANSFORM_STEPS = [
 	{
 		name: 'textureVariants',
 		run: stepTextureVariants,
-		after: ['typeNames', 'arrayConstructors'],
+		after: ['typeNames', 'arrayConstructors', 'volumeLookups'],
 		why: 'the expression tree reads HLSL type names and cannot read type[N](...)'
 	},
 	{
@@ -1671,7 +1717,7 @@ var TRANSFORM_STEPS = [
 	},
 	{ name: 'castsOnVectors', run: stepCastsOnVectors },
 	{ name: 'atan2', run: stepAtan2 },
-	{ name: 'textureCalls', run: stepTextureCalls },
+	{ name: 'textureCalls', run: stepTextureCalls, after: ['volumeLookups'], why: 'volume lookups need their 3D overloads before the 2D fallback' },
 	{ name: 'textureGrad', run: stepTextureGrad },
 	{ name: 'textureLod', run: stepTextureLod },
 	{ name: 'texelFetch', run: stepTexelFetch },
@@ -1794,6 +1840,16 @@ function transformGLSL(src, messages, passLabel, options)
 {
 	var problems = checkTransformPipeline();
 	if (problems.length > 0) { throw new Error('ShaderBridge: the order of the transform steps is wrong: ' + problems.join('; ')); }
+	if (options && options.volumePass)
+	{
+		src = tokenizeSource(src).map(function (t)
+		{
+			if (t.type === 'ident' && t.text === 'iResolution') { return 'ST_VolumeResolution'; }
+			if (t.type === 'preproc') { return t.text.replace(/\biResolution\b/g, 'ST_VolumeResolution'); }
+			return t.text;
+		}).join('');
+		src = 'vec3 ST_VolumeCoord;\n' + src + '\nvoid mainImage(out vec4 ST_voxel,in vec2 ST_unused)\n{\n\tmainVolume(ST_voxel,ST_VolumeCoord);\n}\n';
+	}
 
 	if (options && options.cubemapPass)
 	{

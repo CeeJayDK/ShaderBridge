@@ -20,6 +20,11 @@ check('comments are taken out first and put back last', names[0] === 'extractCom
 // What is known about the order, written down here independently of the list itself. Each pair is
 // [earlier, later, why]. The list must agree with all of them.
 const KNOWN = [
+	['typeNames', 'volumeLookups', 'sampler parameter types need HLSL names'],
+	['arrayConstructors', 'volumeLookups', '3D lookup expressions need ordinary array initializers'],
+	['compatibilityMacros', 'volumeLookups', 'macro-hidden volume calls must be exposed'],
+	['volumeLookups', 'textureVariants', '3D offset and gradient calls must precede the 2D fallback'],
+	['volumeLookups', 'textureCalls', '3D lookups must precede the 2D fallback'],
 	['typeNames', 'arrayDeclarators', 'array element types must be recognized'],
 	['arrayDeclarators', 'splitGlobalDeclarators', 'every variable needs its own dimensions before splitting'],
 	['arrayDeclarators', 'structConstructors', 'struct fields need ordinary array declarations'],
@@ -145,6 +150,7 @@ check('two passes do not share anything', names2 === 'mainImage_BufA mainImage',
 // (or, for a step that only passes on information, changes the pass). A step that is skipped or never
 // exercised is found here.
 const EXAMPLES = {
+	volumeLookups: 'vec4 readVolume(sampler3D data,ivec3 p){return texelFetch(data,p,0);}void mainImage(out vec4 c,vec2 p){c=vec4(1.);}',
 	arrayDeclarators: 'void mainImage(out vec4 c,vec2 p){float[2] a=float[2](.25,.75);c=vec4(a[0]+a[1]);}',
 	voidParameters: 'float value(void){return .5;}void mainImage(out vec4 c,vec2 p){c=vec4(value());}',
 	outParameters: 'float getValue(float x,out vec3 data){if(x<0.)return 0.;data=vec3(1.);return 1.;}void mainImage(out vec4 c,vec2 p){vec3 data;float value=getValue(p.x,data);c=vec4(data,value);}',

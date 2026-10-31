@@ -19,14 +19,15 @@ Run with Node (no dependencies):
 | `t_common.js` | Common declarations are shared or renamed across passes as needed; arrays stay local to each pass; macro environments, channel resolutions, indentation, comment braces, and nested else-if blocks preserve each pass's meaning; only passes contributing to Image are selected (55) |
 | `t_glsl_compat.js` | output defaults and inout preservation, reserved words, `precision`, static globals, array and matrix constructors, conditional and symbolic array lengths, comparison functions, switch, macro typing, definition order and name collisions, rectangular matrix expressions, `inverse` / `outerProduct` / `matrixCompMult`, texture lookups, visual sample-rate declarations, `gl_FragCoord`, conditional fallback returns, file-scope detection, half-float unpacking, dynamic writes to vector components, and DX9 constant shifts and low-bit masks (342) |
 | `t_functions.js` | ReShade FX has no forward declarations: declarations are removed and callers moved after the functions they call (21) |
-| `t_pipeline.js` | the transform is a list of named steps: the order that matters is declared and checked, and every step proves on its own example that it does something (124) |
+| `t_pipeline.js` | the transform is a list of named steps: the order that matters is declared and checked, and every step proves on its own example that it does something (130) |
 | `t_loops.js` | DX9 for-loop hints, large constant loops, nested and unbraced bodies, explicit attributes, function reordering, and specialized texture helpers reached from loops, and array-write unrolling (30) |
 | `t_frames.js` | an effect-local frame counter starts at zero after loading, uses separate read/write textures, and runs before shader passes (5) |
 | `t_cubemap.js` | the cubemap helper agrees with the OpenGL cube map table; generated cubemap inputs, render targets, face-local entry points and feedback are connected correctly (32) |
+| `t_volume.js` | native 3D lookup types and overloads, generated volume inputs, compute dispatch bounds, voxel centers, feedback snapshots, channel dimensions and mipmaps (27) |
 | `t_contrast.js` | the page is readable: every text colour has enough contrast, and the critical styles agree with the stylesheet (70) |
 | `t_standalone.js` | the .fx includes nothing; author attribution precedes porter credits, metadata stays inside comments, and frame duration uses seconds (20) |
 | `corpus/run.js` | 174 small GLSL idioms, each ported and compiled with the real ReShade compiler; synthetic DX9 loops and bit operations also check the instruction-slot budget on Windows |
-| `t_assembly_compile.js` | 36 complete synthetic effects, including nested structs with value copies and out/inout aliases, conditional array lengths and shared tables, buffer mipmaps, unconnected helper samplers, generated cubemap feedback, multipass macro isolation, resource aliases, hoisted texture reads, channel resolutions, and metadata; every entry point compiles for DX11; 34 also compile for DX9 on Windows (the two dynamic array-write cases require a modern API) |
+| `t_assembly_compile.js` | 40 complete synthetic effects, including nested structs with value copies and out/inout aliases, conditional array lengths and shared tables, buffer mipmaps, unconnected helper samplers, generated cubemap feedback, multipass macro isolation, resource aliases, hoisted texture reads, channel resolutions, and metadata; every entry point compiles for DX11; 36 also compile for DX9 on Windows (two dynamic array-write cases and two compute-volume cases require a modern API) |
 | `roundtrip.js` | the lexer must reproduce every shader source exactly |
 
 ## Environment
@@ -79,3 +80,15 @@ from a porter error, retry compilation with `-Od`. For a runtime test, add
 `shaders/CubemapViewer.json` is a Shadertoy shader (it also runs on Shadertoy as it is) that shows the cubemap on channel 0
 as an unfolded cross with coloured frames and as a panorama. Port it, put the cubemap strip where ReShade finds it,
 and the six faces should join without seams. Set `FACE_TINT` to 1 to tint the panorama by face.
+
+## Generated volumes
+
+Volume A imports as a native 3D texture. A compute pass calls `mainVolume` once per voxel,
+and self-feedback uses a separate previous-frame volume. `ST_VOLUME_SIZE` controls each
+axis (default 128). Generated volumes require compute support: DX11 or another compute-capable
+renderer. Implicit texture samples in a volume compute pass use mip level zero; explicit
+LOD and gradient samples retain their specified arguments.
+
+ReShade 6.8 uses two-component offsets in its 3D LOD/gradient offset overloads.
+Those calls produce explicit conversion errors requiring a manual rewrite. Basic 3D sampling,
+ordinary texture offsets and integer fetch offsets compile for both DX9 and DX11.

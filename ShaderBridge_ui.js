@@ -2,8 +2,8 @@
 // PASS MANAGEMENT
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PASS_ORDER  = ['common', 'bufA', 'bufB', 'bufC', 'bufD', 'cubemapA', 'image'];
-var PASS_LABELS = { common: 'Common', bufA: 'Buffer A', bufB: 'Buffer B', bufC: 'Buffer C', bufD: 'Buffer D', cubemapA: 'Cubemap A', image: 'Image' };
+var PASS_ORDER  = ['common', 'bufA', 'bufB', 'bufC', 'bufD', 'cubemapA', 'volumeA', 'image'];
+var PASS_LABELS = { common: 'Common', bufA: 'Buffer A', bufB: 'Buffer B', bufC: 'Buffer C', bufD: 'Buffer D', cubemapA: 'Cubemap A', volumeA: 'Volume A', image: 'Image' };
 var PASS_PLACEHOLDERS =
 {
 	common:   '// Common tab: shared functions and #defines.\n// Prepended verbatim to all passes.\n// No mainImage() here.\n',
@@ -12,6 +12,7 @@ var PASS_PLACEHOLDERS =
 	bufC:     '// Buffer C: void mainImage( out vec4 fragColor, in vec2 fragCoord )\n',
 	bufD:     '// Buffer D: void mainImage( out vec4 fragColor, in vec2 fragCoord )\n',
 	cubemapA: '// Cubemap A: void mainCubemap(out vec4 color, in vec2 pixel, in vec3 origin, in vec3 direction)\n',
+	volumeA: '// Volume A: void mainVolume(out vec4 voxel, in vec3 coordinate)\n',
 	image:    '// ─────────────────────────────────────────────────────────────────────────\n'
 	        + '// ShaderBridge — Shadertoy → ReShade FX Porter\n'
 	        + '// ─────────────────────────────────────────────────────────────────────────\n'
@@ -39,7 +40,7 @@ var PASS_PLACEHOLDERS =
 };
 
 // Pass IDs that render to a texture target (can be used as channel inputs)
-var BUF_IDS = ['bufA', 'bufB', 'bufC', 'bufD', 'cubemapA'];
+var BUF_IDS = ['bufA', 'bufB', 'bufC', 'bufD', 'cubemapA', 'volumeA'];
 
 // Current shader metadata loaded from a .json file (null when loading raw GLSL)
 // ── Channel resource data ─────────────────────────────────────────────────────
@@ -86,7 +87,7 @@ var CH_VOLUMES = [
 // Which channel types get a name sub-dropdown
 var CH_HAS_NAME   = { texture: true, cubemap: true, volume: true };
 // Intermediate render targets can generate mipmaps after each writing pass.
-var CH_HAS_MIPMAP = { texture: true, volume: true, bufA: true, bufB: true, bufC: true, bufD: true, cubemapA: true };
+var CH_HAS_MIPMAP = { texture: true, volume: true, bufA: true, bufB: true, bufC: true, bufD: true, cubemapA: true, volumeA: true };
 // Which types support Vflip
 var CH_HAS_VFLIP  = { texture: true, cubemap: true, cubemapA: true, volume: true };
 
@@ -661,8 +662,10 @@ function convert()
 		var cubemapSamplers = [];
 		p.channels.forEach(function(kind, ci) { if (kind === 'cubemap' || kind === 'cubemapA') { cubemapSamplers.push('iChannel' + ci); } });
 		var emptySamplers = [];
+		var volumeSamplers = [];
+		p.channels.forEach(function(kind, ci) { if (kind === 'volumeA' || kind === 'vol1' || kind === 'vol4') { volumeSamplers.push('iChannel' + ci); } });
 		p.channels.forEach(function(kind, ci) { if (!kind || kind === 'none') { emptySamplers.push('iChannel' + ci); } });
-		var result = transformGLSL(src, passMessages, passLabel, { cubemapSamplers: cubemapSamplers, emptySamplers: emptySamplers, cubemapPass: p.id === 'cubemapA' });
+		var result = transformGLSL(src, passMessages, passLabel, { cubemapSamplers: cubemapSamplers, volumeSamplers: volumeSamplers, emptySamplers: emptySamplers, cubemapPass: p.id === 'cubemapA', volumePass: p.id === 'volumeA' });
 		passMessages.forEach(function(m)
 		{
 			messages.push({ level: m.level, text: '[' + PASS_LABELS[p.id] + '] ' + m.text });

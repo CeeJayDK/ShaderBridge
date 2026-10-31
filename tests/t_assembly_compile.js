@@ -8,6 +8,16 @@ const porter = require('./load_porter.js')();
 
 const image = 'void mainImage(out vec4 c,vec2 p) { c=vec4(gain(p.x)); }';
 const cases = require('./nested_struct_cases.js').concat([
+	{name:'generated_volume_feedback',ids:['volumeA','image'],channels:[['volumeA'],['volumeA']],selfRefs:[[0],[]],shaderModels:['50'],sources:[
+		'void mainVolume(out vec4 c,vec3 p){ivec3 q=ivec3(p);float count=iFrame==0?1.:texelFetch(iChannel0,q,0).w+1.;c=vec4(p,count);}',
+		'void mainImage(out vec4 c,vec2 p){ivec3 size=textureSize(iChannel0,0);ivec3 q=ivec3(int(p.x)%size.x,int(p.y)%size.y,(int(p.x)/size.x)%size.z);vec4 v=texelFetch(iChannel0,q,0);bool ok=all(lessThan(abs(v.xyz-(vec3(q)+.5)),vec3(.001)))&&abs(v.w-float(iFrame+1))<.001&&all(equal(iChannelResolution[0],vec3(size)));c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}'
+	]},
+	{name:'generated_volume_mipmaps',ids:['volumeA','image'],channels:[[],['volumeA']],filters:[[],['mipmap']],shaderModels:['50'],sources:[
+		'void mainVolume(out vec4 c,vec3 p){c=vec4(.25,.5,.75,1.);}',
+		'void mainImage(out vec4 c,vec2 p){vec4 v=textureLod(iChannel0,vec3(.5),1.);bool ok=all(lessThan(abs(v-vec4(.25,.5,.75,1.)),vec4(.001)));c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}'
+	]},
+	{name:'volume_sampler_basic',channels:[['vol4']],sources:['vec4 readVolume(sampler3D s,vec3 p){ivec3 size=textureSize(s,0);return texture(s,p)+textureLod(s,p,0.)+textureGrad(s,p,vec3(.001,0.,0.),vec3(0.,.001,0.))+texelFetch(s,size/2,0);}\nvoid mainImage(out vec4 c,vec2 p){c=readVolume(iChannel0,vec3(p/iResolution.xy,.5));}']},
+	{name:'volume_sampler_offsets',channels:[['vol4']],sources:['vec4 readVolume(sampler3D s,vec3 p){return textureOffset(s,p,ivec3(1,0,0))+texelFetchOffset(s,ivec3(0),0,ivec3(0,0,1));}\nvoid mainImage(out vec4 c,vec2 p){c=readVolume(iChannel0,vec3(p/iResolution.xy,.5));}']},
 	{name:'array_type_declarators',sources:['const float[2] weights=float[2](.25,.75),other=float[2](.5,.5);\nvoid fill(out float[3] a,float value){for(int k=0;k<3;k++){a[k]=value*float(k);}}\nvoid mainImage(out vec4 c,vec2 p){float[3] a;fill(a,.25);vec4[2] colors=vec4[2](vec4(.125),vec4(.375));bool ok=weights[0]+weights[1]==1.&&other[0]+other[1]==1.&&a[2]==.5&&colors[0].x+colors[1].x==.5;c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}']},
 	{name:'array_write_loop',sources:['void fill(out vec4 a[4]){for(int k=0;k<4;k++){a[k].xyz=vec3(float(k));a[k].w=1.;}}\nvoid mainImage(out vec4 c,vec2 p){vec4 a[4];fill(a);bool ok=a[0].x==0.&&a[1].y==1.&&a[2].z==2.&&a[3].w==1.;c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}']},
 	{name:'loop_texture_helper',sources:['vec4 leaf(vec2 p){return texture(iChannel0,p);}\nvec4 middle(vec2 p){return leaf(p);}\nvoid mainImage(out vec4 c,vec2 p){vec2 uv=p/iResolution.xy;vec4 original=middle(uv);vec4 sum=vec4(0.);for(int k=0;k<8;k++){sum+=middle(uv);}vec4 expected=textureLod(iChannel0,uv,0.)*8.;bool ok=all(lessThan(abs(sum-expected),vec4(.001)))&&all(lessThan(abs(original-texture(iChannel0,uv)),vec4(.001)));c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}'],channels:[['backbuffer']]},
@@ -62,7 +72,7 @@ function build(test)
 		const id = test.ids ? test.ids[i] : i === test.sources.length - 1 ? 'image' : 'bufA';
 		const used = new Set(); porter.detectUniforms(src, used);
 		const channels=(test.channels || [])[i] || [];
-		const transformed = porter.transformGLSL(src, [], id === 'image' ? 'Image' : id === 'cubemapA' ? 'CubeA' : 'BufA', {cubemapPass:id==='cubemapA',cubemapSamplers:channels.map((kind,ch)=>kind==='cubemapA'?'iChannel'+ch:null).filter(Boolean)});
+		const transformed = porter.transformGLSL(src, [], id === 'image' ? 'Image' : id === 'cubemapA' ? 'CubeA' : id === 'volumeA' ? 'VolumeA' : 'BufA', {cubemapPass:id==='cubemapA',volumePass:id==='volumeA',volumeSamplers:channels.map((kind,ch)=>['volumeA','vol1','vol4'].includes(kind)?'iChannel'+ch:null).filter(Boolean),cubemapSamplers:channels.map((kind,ch)=>kind==='cubemapA'?'iChannel'+ch:null).filter(Boolean)});
 		return Object.assign({id:id, usedUniforms:used, channels:channels, channelNames:(test.channelNames || [])[i] || [], filters:(test.filters || [])[i] || ['linear'], wraps:['clamp'], vflips:[true], format:'RGBA32F', selfRefChannels:(test.selfRefs || [])[i] || []}, transformed);
 	});
 	return porter.assembleFxFile(passes, true, [], test.info || {name:test.name,username:'Synthetic regression'});
@@ -84,7 +94,7 @@ function run()
 			{
 				const front = spawnSync(cli, ['--shader-model',sm,'--list-entry-points',file], {encoding:'utf8',timeout:60000});
 				if (front.status !== 0) { throw new Error(front.stdout + front.stderr); }
-				const entries = Array.from(front.stdout.matchAll(/^\s+(\w+) \((?:pixel|vertex)\)/gm), m=>m[1]);
+				const entries = Array.from(front.stdout.matchAll(/^\s+(\w+) \((?:pixel|vertex|compute)\)/gm), m=>m[1]);
 				if (!entries.length) { throw new Error('Compiler returned no entry points'); }
 				entries.forEach(function (entry)
 				{

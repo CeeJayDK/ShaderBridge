@@ -27,7 +27,7 @@ function anPromote(a, b)
 var AN_SAME_AS_ARG0 = 'abs sign floor ceil fract frac sin cos tan asin acos atan sinh cosh tanh exp exp2 log log2 sqrt inversesqrt rsqrt normalize saturate radians degrees trunc round ddx ddy dFdx dFdy fwidth ddx_fine ddy_fine ddx_coarse ddy_coarse min max clamp pow mod fmod atan2 reflect refract mix lerp step smoothstep rcp'.split(' ');
 var AN_SCALAR_FLOAT = 'dot length distance determinant'.split(' ');
 var AN_BOOL_RESULT = 'any all isnan isinf'.split(' ');
-var AN_FLOAT4_RESULT = 'tex2D tex2Dlod tex2Dgrad tex2Dbias tex2Dfetch tex2Dproj tex3D tex3Dlod texCUBE texCUBElod texture texture2D textureLod textureGrad texelFetch textureCube textureCubeLod'.split(' ');
+var AN_FLOAT4_RESULT = 'tex2D tex2Dlod tex2Dgrad tex2Dbias tex2Dfetch tex2Dproj tex3D tex3Dlod tex3Dfetch tex3Dgrad texCUBE texCUBElod texture texture2D textureLod textureGrad texelFetch textureCube textureCubeLod'.split(' ');
 
 function anBuiltinType(name, args)
 {
@@ -49,6 +49,7 @@ function anBuiltinType(name, args)
 	if (AN_BOOL_RESULT.indexOf(name) !== -1) { return 'bool'; }
 	if (AN_FLOAT4_RESULT.indexOf(name) !== -1) { return 'float4'; }
 	if (name === 'cross') { return 'float3'; }
+	if (name === 'tex3Dsize' || (name === 'textureSize' && t0 === 'sampler3D')) { return 'int3'; }
 	if (name === 'tex2Dsize' || name === 'textureSize') { return 'int2'; }
 	if (name === 'textureOffset' || name === 'textureLodOffset' || name === 'textureGradOffset' || name === 'texelFetchOffset' || name === 'textureProj') { return 'float4'; }
 	if (name === 'matrixCompMult') { return t0; }

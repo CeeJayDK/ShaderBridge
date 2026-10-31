@@ -270,7 +270,7 @@ function buildSamplerBlock(channelConfig, usedChannels, bufTexNames, messages, c
 		}
 		else if (bufTexNames[cfg]) {
 			lines.push('// iChannel' + i + ' — ' + cfg + ' output');
-			lines.push('sampler2D iChannel' + i);
+			lines.push((/^volume/.test(cfg) ? 'sampler3D' : 'sampler2D') + ' iChannel' + i);
 			lines.push('{');
 			lines.push('\tTexture   = ' + bufTexNames[cfg] + ';');
 			lines.push('\tMagFilter = ' + fTok + ';');
@@ -278,6 +278,7 @@ function buildSamplerBlock(channelConfig, usedChannels, bufTexNames, messages, c
 			if (mip) { lines.push('\tMipFilter = LINEAR;'); }
 			lines.push('\tAddressU  = ' + wTok + ';');
 			lines.push('\tAddressV  = ' + wTok + ';');
+			if (/^volume/.test(cfg)) { lines.push('\tAddressW  = ' + wTok + ';'); }
 			if (vflip) { lines.push('\t// Vflip: not applied to buffers; they keep Shadertoy\'s row order, so no flip is needed'); }
 			lines.push('};');
 		}
@@ -350,7 +351,13 @@ function buildChannelResolution(channelConfig, channelNames, bufTexNames, usedCh
 		var name = channelNames ? channelNames[i] : '';
 		var wDef, hDef, dDef;
 
-		if (cfg === 'cubemapA' || cfg === 'cubemapA_prev') {
+		if (cfg === 'volumeA' || cfg === 'volumeA_prev') {
+			wDef = 'ST_VOLUME_SIZE'; hDef = 'ST_VOLUME_SIZE'; dDef = 'ST_VOLUME_SIZE';
+		}
+		else if (cfg === 'vol1' || cfg === 'vol4') {
+			wDef = '32'; hDef = '32'; dDef = '32';
+		}
+		else if (cfg === 'cubemapA' || cfg === 'cubemapA_prev') {
 			wDef = 'ST_CUBEMAP_SIZE'; hDef = 'ST_CUBEMAP_SIZE'; dDef = null;
 		}
 		else if (cfg === 'backbuffer' || bufTexNames[cfg]) {
@@ -406,8 +413,8 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 	});
 
 	// Buffer pass ids in this file
-	var bufIds = ['bufA', 'bufB', 'bufC', 'bufD', 'cubemapA'];
-	var bufLabels = { bufA: 'BufA', bufB: 'BufB', bufC: 'BufC', bufD: 'BufD', cubemapA: 'CubeA' };
+	var bufIds = ['bufA', 'bufB', 'bufC', 'bufD', 'cubemapA', 'volumeA'];
+	var bufLabels = { bufA: 'BufA', bufB: 'BufB', bufC: 'BufC', bufD: 'BufD', cubemapA: 'CubeA', volumeA: 'VolumeA' };
 	var activeBufs = transformedPasses.filter(function (p) { return bufIds.indexOf(p.id) !== -1; });
 
 	// Build texture name map for buffer passes
@@ -458,6 +465,13 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 
 	lines.push(HELPER_SOURCE);
 	lines.push('');
+	if (bufTexNames.volumeA)
+	{
+		lines.push('#if __RENDERER__ < 0xb000', '#error Generated volumes require compute shader support (DirectX 11 or newer).', '#endif');
+		lines.push('#ifndef ST_VOLUME_SIZE', '#define ST_VOLUME_SIZE 128', '#endif');
+		lines.push('static const float3 ST_VolumeResolution = float3(ST_VOLUME_SIZE, ST_VOLUME_SIZE, ST_VOLUME_SIZE);', '');
+		messages.push({ level: 'info', text: 'Volume A uses a generated 3D texture and compute passes; DirectX 11 or another compute-capable renderer is required. ST_VOLUME_SIZE controls the voxel dimensions.' });
+	}
 	if (Object.keys(mipmappedBufs).length)
 	{
 		var mipTerms = ['1'];
@@ -536,13 +550,18 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 		activeBufs.forEach(function (p) {
 			var texName = bufTexNames[p.id];
 			var dimensions = p.id === 'cubemapA' ? 'Width = 6 * ST_CUBEMAP_SIZE; Height = ST_CUBEMAP_SIZE;' : 'Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT;';
-			var mipLevels = mipmappedBufs[p.id] ? ' MipLevels = ST_MIP_LEVELS(' + (p.id === 'cubemapA' ? 'ST_CUBEMAP_SIZE, ST_CUBEMAP_SIZE' : 'BUFFER_WIDTH, BUFFER_HEIGHT') + ');' : '';
-			lines.push('texture2D ' + texName + ' { ' + dimensions + ' Format = ' + p.format + ';' + mipLevels + ' };');
+			var textureType = p.id === 'volumeA' ? 'texture3D' : 'texture2D';
+			if (p.id === 'volumeA') { dimensions = 'Width = ST_VOLUME_SIZE; Height = ST_VOLUME_SIZE; Depth = ST_VOLUME_SIZE;'; }
+			var mipDimensions = p.id === 'volumeA' ? 'ST_VOLUME_SIZE, ST_VOLUME_SIZE' : p.id === 'cubemapA' ? 'ST_CUBEMAP_SIZE, ST_CUBEMAP_SIZE' : 'BUFFER_WIDTH, BUFFER_HEIGHT';
+			var mipLevels = mipmappedBufs[p.id] ? ' MipLevels = ST_MIP_LEVELS(' + mipDimensions + ');' : '';
+			lines.push(textureType + ' ' + texName + ' { ' + dimensions + ' Format = ' + p.format + ';' + mipLevels + ' };');
+			if (p.id === 'volumeA') { lines.push('storage3D ST_VolumeOutput { Texture = ' + texName + '; };'); }
 			// Emit prev texture for self-referencing passes
 			if (selfRefBufs[p.id]) {
 				var prevTex = bufPrevTexNames[p.id];
 				lines.push('// Previous-frame copy of ' + texName + ' — used for self-referencing channel(s) ' + selfRefBufs[p.id].join(', '));
-				lines.push('texture2D ' + prevTex + ' { ' + dimensions + ' Format = ' + p.format + ';' + mipLevels + ' };');
+				lines.push(textureType + ' ' + prevTex + ' { ' + dimensions + ' Format = ' + p.format + ';' + mipLevels + ' };');
+				if (p.id === 'volumeA') { lines.push('storage3D ST_VolumePreviousOutput { Texture = ' + prevTex + '; };'); }
 			}
 		});
 		lines.push('');
@@ -556,6 +575,12 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 				var prevTex = bufPrevTexNames[id];
 				var copyPS  = 'PS_Copy_' + bufLabels[id];
 				var copySmp = 'smp_Copy_' + bufLabels[id];
+				if (id === 'volumeA')
+				{
+					lines.push('sampler3D ' + copySmp + ' { Texture = ' + srcTex + '; };');
+					lines.push('void CS_Copy_VolumeA(uint3 id : SV_DispatchThreadID)', '{', '\tif (any(id >= uint3(ST_VOLUME_SIZE, ST_VOLUME_SIZE, ST_VOLUME_SIZE))) return;', '\ttex3Dstore(ST_VolumePreviousOutput, int3(id), tex3Dfetch(' + copySmp + ', int3(id)));', '}', '');
+					return;
+				}
 				lines.push('sampler2D ' + copySmp + ' { Texture = ' + srcTex + '; MinFilter = LINEAR; MagFilter = LINEAR; };');
 				lines.push('void ' + copyPS + '(float4 vpos : SV_Position, float2 texcoord : TEXCOORD, out float4 output : SV_Target)');
 				lines.push('{');
@@ -955,7 +980,12 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 		// pass that renders to the screen needs that. Buffer passes keep the row order that
 		// Shadertoy has in memory (fragCoord.y == row), so a buffer that stores data by row, or feeds
 		// back into itself, reads back at the same coordinates it was written to.
-		if (!isBuf) {
+		if (p.id === 'volumeA') {
+			lines.push('void CS_ShadertoyVolumeA(uint3 id : SV_DispatchThreadID)', '{', '\tif (any(id >= uint3(ST_VOLUME_SIZE, ST_VOLUME_SIZE, ST_VOLUME_SIZE))) return;', '\tST_VolumeCoord = float3(id) + 0.5;', '\tfloat4 value = float4(0.0, 0.0, 0.0, 0.0);');
+			if (initName) { lines.push('\t' + initName + '();'); }
+			lines.push('\t' + mainImgName + '(ST_VolumeCoord.xy, value);', '\ttex3Dstore(ST_VolumeOutput, int3(id), value);', '}');
+		}
+		else if (!isBuf) {
 			lines.push('void ' + psName + '(float4 vpos : SV_Position, float2 texcoord : TEXCOORD, out float4 output : SV_Target)');
 			lines.push('{');
 			lines.push('\tfloat2 ' + coordVar + ' = float2(vpos.x, ST_FLIP_Y ? BUFFER_HEIGHT - vpos.y : vpos.y);');
@@ -1030,6 +1060,16 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 		var isBuf = bufIds.indexOf(p.id) !== -1;
 		var label = isBuf ? bufLabels[p.id] : 'Main';
 		var psName = 'PS_Shadertoy' + label;
+		if (p.id === 'volumeA')
+		{
+			function computePass(passName, entry)
+			{
+				lines.push('\tpass ' + passName, '\t{', '\t\tComputeShader = ' + entry + '<4,4,4>;', '\t\tDispatchSizeX = (ST_VOLUME_SIZE + 3) / 4;', '\t\tDispatchSizeY = (ST_VOLUME_SIZE + 3) / 4;', '\t\tDispatchSizeZ = (ST_VOLUME_SIZE + 3) / 4;', '\t}');
+			}
+			if (selfRefBufs[p.id]) { computePass('Copy_VolumeA', 'CS_Copy_VolumeA'); }
+			computePass('VolumeA', 'CS_ShadertoyVolumeA');
+			return;
+		}
 
 		// Insert copy pass before a self-referencing buffer pass
 		if (selfRefBufs[p.id]) {

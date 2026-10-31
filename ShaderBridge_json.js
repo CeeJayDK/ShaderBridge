@@ -132,6 +132,12 @@ function resolveJsonInput(inp, outputIdMap, thisPassId)
 
 	if (type === 'volume')
 	{
+		if (outputIdMap[inp.id])
+		{
+			var generatedVolume = makeChannel(outputIdMap[inp.id]);
+			generatedVolume.filter = filter; generatedVolume.wrap = wrap;
+			return { ch: generatedVolume, warn: null, selfRef: outputIdMap[inp.id] === thisPassId };
+		}
 		var hash    = extractMediaHash(fp);
 		var volName = hash ? (SHADERTOY_VOLUME_HASH_MAP[hash] || '') : '';
 		var ch = makeChannel('volume');
@@ -190,10 +196,11 @@ function populateFromJson(data)
 	var outputIdMap = {};
 	renderpasses.forEach(function (rp)
 	{
-		if (rp.type !== 'buffer' && rp.type !== 'cubemap') { return; }
+		if (rp.type !== 'buffer' && rp.type !== 'cubemap' && rp.type !== 'volume') { return; }
 		var outputs = rp.outputs || [];
 		if (!outputs.length) { return; }
 		var outId = outputs[0].id;
+		if (rp.type === 'volume') { outputIdMap[outId] = 'volumeA'; return; }
 
 		if (rp.type === 'cubemap')
 		{
@@ -240,6 +247,7 @@ function populateFromJson(data)
 		else if (t === 'buffer')  { bufferPasses.push(rp); }
 		else if (t === 'image')   { imagePass = rp; }
 		else if (t === 'cubemap') { bufferPasses.push(rp); }
+		else if (t === 'volume')  { bufferPasses.push(rp); }
 		else if (t === 'sound')   { soundPass = rp; }
 	});
 
@@ -252,7 +260,7 @@ function populateFromJson(data)
 	}
 
 	// ── Buffer passes ── (add in order: A, B, C, D, cubemapA)
-	var bufOrder = ['bufA', 'bufB', 'bufC', 'bufD', 'cubemapA'];
+	var bufOrder = ['bufA', 'bufB', 'bufC', 'bufD', 'cubemapA', 'volumeA'];
 
 	// Sort by our slot order
 	var sortedBufs = bufOrder.map(function (slot)
@@ -263,6 +271,7 @@ function populateFromJson(data)
 			var t    = (rp.type || '').toLowerCase();
 			var name = (rp.name || '').toLowerCase().replace(/\s/g, '');
 			if (slot === 'cubemapA' && t === 'cubemap')   { found = rp; }
+			else if (slot === 'volumeA' && t === 'volume') { found = rp; }
 			else if (slot === 'bufA' && name === 'buffera') { found = rp; }
 			else if (slot === 'bufB' && name === 'bufferb') { found = rp; }
 			else if (slot === 'bufC' && name === 'bufferc') { found = rp; }
