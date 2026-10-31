@@ -20,6 +20,9 @@ check('comments are taken out first and put back last', names[0] === 'extractCom
 // What is known about the order, written down here independently of the list itself. Each pair is
 // [earlier, later, why]. The list must agree with all of them.
 const KNOWN = [
+	['reorderFunctions', 'fallbackReturns', 'complete function bodies must be visible'],
+	['glslHelpers', 'fallbackReturns', 'generated helpers must be visible'],
+	['fallbackReturns', 'd3d9ForLoops', 'return analysis must precede conditional loop directives'],
 	['typeNames', 'conditionalStatements', 'conditional expressions need typed names'],
 	['compatibilityMacros', 'conditionalStatements', 'macro-hidden conditionals must be exposed'],
 	['arrayConstructors', 'conditionalStatements', 'conditional arms need ordinary array initializers'],
@@ -154,6 +157,7 @@ check('two passes do not share anything', names2 === 'mainImage_BufA mainImage',
 // (or, for a step that only passes on information, changes the pass). A step that is skipped or never
 // exercised is found here.
 const EXAMPLES = {
+	fallbackReturns: 'float choose(float x){if(x>0.)return x;}void mainImage(out vec4 c,vec2 p){c=vec4(choose(p.x));}',
 	conditionalStatements: 'void mainImage(out vec4 c,vec2 p){float value=0.;p.x<1.?value=2.:value=3.;c=vec4(value);}',
 	volumeLookups: 'vec4 readVolume(sampler3D data,ivec3 p){return texelFetch(data,p,0);}void mainImage(out vec4 c,vec2 p){c=vec4(1.);}',
 	arrayDeclarators: 'void mainImage(out vec4 c,vec2 p){float[2] a=float[2](.25,.75);c=vec4(a[0]+a[1]);}',

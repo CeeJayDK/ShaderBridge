@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.0.72';
+var PORTER_VERSION = '3.0.73';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -1609,6 +1609,81 @@ function stepD3D9ForLoops(ctx)
 	}
 }
 
+function stepFallbackReturns(ctx)
+{
+	// GLSL leaves a non-void function's missing return path undefined. FXC
+	// rejects it. Supply zero when structured control flow may fall through.
+	var A = analyzeSource(ctx.src), edits = [];
+	if (!A.ok) { return; }
+	function text(i) { var t = A.tokens[A.sig[i]]; return t ? t.text : ''; }
+	function close(i)
+	{
+		var right = { '(': ')', '[': ']', '{': '}' }[text(i)], depth = 1;
+		for (var j = i + 1; j < A.sig.length; j++)
+		{
+			if (text(j) === text(i)) { depth++; }
+			else if (text(j) === right && --depth === 0) { return j + 1; }
+		}
+		return A.sig.length;
+	}
+	function statement(i, limit)
+	{
+		while (text(i) === '[') { i = close(i); }
+		if (text(i) === '{')
+		{
+			var end = close(i), returns = false, escapes = false, j = i + 1;
+			while (j < end - 1)
+			{
+				var part = statement(j, end - 1);
+				if (!returns) { escapes = escapes || part.escapes; returns = !escapes && part.returns; }
+				if (part.end <= j) { break; }
+				j = part.end;
+			}
+			return { end: end, returns: returns, escapes: escapes };
+		}
+		if (text(i) === 'if' && text(i + 1) === '(')
+		{
+			var yes = statement(close(i + 1), limit);
+			if (text(yes.end) !== 'else') { return { end: yes.end, returns: false, escapes: yes.escapes }; }
+			var no = statement(yes.end + 1, limit);
+			return { end: no.end, returns: yes.returns && no.returns, escapes: yes.escapes || no.escapes };
+		}
+		if ((text(i) === 'for' || text(i) === 'while') && text(i + 1) === '(')
+		{
+			return { end: statement(close(i + 1), limit).end, returns: false };
+		}
+		if (text(i) === 'do')
+		{
+			var body = statement(i + 1, limit), tail = body.end;
+			return { end: text(tail) === 'while' ? close(tail + 1) + 1 : tail, returns: body.returns };
+		}
+		var returns = text(i) === 'return', escapes = text(i) === 'break' || text(i) === 'continue';
+		for (; i < limit; i++)
+		{
+			if (text(i) === '(' || text(i) === '[' || text(i) === '{') { i = close(i) - 1; }
+			else if (text(i) === ';') { return { end: i + 1, returns: returns, escapes: escapes }; }
+		}
+		return { end: i, returns: returns, escapes: escapes };
+	}
+	Object.keys(A.functions).forEach(function (name)
+	{
+		A.functions[name].forEach(function (fn)
+		{
+			var type = anParseType(fn.ret);
+			if (!type || fn.bodyFrom === undefined) { return; }
+			var start = A.tokens[A.sig[fn.bodyFrom]].start, end = A.tokens[A.sig[fn.bodyTo]].start;
+			// Conditional compilation and switch fallthrough need separate control-flow
+			// reasoning. Leave these functions untouched rather than guessing.
+			if (A.tokens.some(function (t) { return t.start > start && t.start < end && (t.type === 'preproc' || (t.type === 'ident' && t.text === 'switch')); })) { return; }
+			if (statement(fn.bodyFrom, fn.bodyTo + 1).returns) { return; }
+			var zero = type.kind === 'mat' ? fn.ret + '(' + new Array(type.rows * type.cols).fill('0.0').join(', ') + ')' : '(' + fn.ret + ')0';
+			edits.push({ at: end, text: '\n\treturn ' + zero + ';\n' });
+			ctx.messages.push({ level: 'warn', text: 'No return was proven on every path in ' + name + '. Added zero if an originally undefined path reaches the end; existing returns are preserved.' });
+		});
+	});
+	edits.sort(function (a, b) { return b.at - a.at; }).forEach(function (edit) { ctx.src = ctx.src.slice(0, edit.at) + edit.text + ctx.src.slice(edit.at); });
+}
+
 function stepD3D9BitOperations(ctx)
 {
 	// SM3 uses floating-point registers for integers. Powers of two let these operations be
@@ -1824,6 +1899,12 @@ var TRANSFORM_STEPS = [
 		why: 'it reads the flag that step sets'
 	},
 	{
+		name: 'fallbackReturns',
+		run: stepFallbackReturns,
+		after: ['reorderFunctions', 'glslHelpers'],
+		why: 'function bodies and generated helpers must be complete before return paths are checked'
+	},
+	{
 		name: 'd3d9BitOperations',
 		run: stepD3D9BitOperations,
 		after: ['reorderFunctions', 'glslHelpers'],
@@ -1832,7 +1913,7 @@ var TRANSFORM_STEPS = [
 	{
 		name: 'd3d9ForLoops',
 		run: stepD3D9ForLoops,
-		after: ['reorderFunctions', 'glslHelpers', 'loopGradientTex'],
+		after: ['reorderFunctions', 'glslHelpers', 'loopGradientTex', 'fallbackReturns'],
 		why: 'conditional loop hints must follow expression analysis, function reordering and gradient lookup rewriting'
 	},
 	{ name: 'restoreComments', run: stepRestoreComments }
