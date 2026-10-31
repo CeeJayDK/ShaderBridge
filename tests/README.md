@@ -10,7 +10,7 @@ Run with Node (no dependencies):
 | `t_analyzer.js` | what each phase of the analysis adds (tokens, dead branches, macros, structs, signatures, scopes, lookup, expression walk) and that the phases need each other in order (68) |
 | `t_structs.js` | nested struct values, constructors, deep members, field names and comments, conditional declarations, and aliased out/inout updates (20) |
 | `t_porter_mat.js` | `rewriteInlineMatrixMul`, loaded exactly as it ships, including file-scope initialisers (33) |
-| `t_porter_vec.js` | `rewriteVectorConstructorArgs` (25) |
+| `t_porter_vec.js` | vector constructor truncation and scalar constructors from vectors (33) |
 | `t_broadcast.js` | scalar broadcast constructors expand, vector conversions and copies do not (31) |
 | `t_flip.js` | the `ST_FLIP_Y` / `ST_VFLIP_*` options, the mouse, no `iResolution` dependency (33) |
 | `t_vflip.js` | V flip at texture sample sites, with the flag passed through sampler parameters, including offset overloads and loops with HLSL attributes (42) |
@@ -28,8 +28,8 @@ Run with Node (no dependencies):
 | `t_returns.js` | numeric fall-through returns, complete branches, loop exits, and preservation of existing returns (17) |
 | `t_contrast.js` | the page is readable: every text colour has enough contrast, and the critical styles agree with the stylesheet (70) |
 | `t_standalone.js` | the .fx includes nothing; author attribution precedes porter credits, metadata stays inside comments, and frame duration uses seconds (20) |
-| `corpus/run.js` | 182 small GLSL idioms, each ported and compiled with the real ReShade compiler; synthetic DX9 loops and bit operations also check the instruction-slot budget on Windows |
-| `t_assembly_compile.js` | 48 complete synthetic effects, including nested structs with value copies and out/inout aliases, conditional array lengths and shared tables, buffer mipmaps, unconnected helper samplers, generated cubemap feedback, multipass macro isolation, resource aliases, hoisted texture reads, channel resolutions, and metadata; every entry point compiles for DX11; 44 also compile for DX9 on Windows (two dynamic array-write cases and two compute-volume cases require a modern API) |
+| `corpus/run.js` | 184 small GLSL idioms, each ported and compiled with the real ReShade compiler; synthetic DX9 loops and bit operations also check the instruction-slot budget on Windows |
+| `t_assembly_compile.js` | 49 complete synthetic effects, including nested structs with value copies and out/inout aliases, conditional array lengths and shared tables, buffer mipmaps, unconnected helper samplers, generated cubemap feedback, multipass macro isolation, resource aliases, hoisted texture reads, channel resolutions, and metadata; every entry point compiles for DX11; 45 also compile for DX9 on Windows (two dynamic array-write cases and two compute-volume cases require a modern API) |
 | `roundtrip.js` | the lexer must reproduce every shader source exactly |
 
 ## Environment

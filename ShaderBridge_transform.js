@@ -2259,7 +2259,7 @@ function rewriteVectorConstructorArgs(src, messages)
 	// other than a primary expression needs parentheses first.
 	function swizzled(node, render, swz)
 	{
-		if (node.kind === 'unary') { return node.op + swizzled(node.child, render, swz); }
+		if (node.kind === 'unary' && node.op !== '++' && node.op !== '--') { return node.op + swizzled(node.child, render, swz); }
 		var primary = node.kind === 'ident' || node.kind === 'call' || node.kind === 'member' || node.kind === 'index' || node.kind === 'paren';
 		return (primary ? render(node) : '(' + render(node) + ')') + '.' + swz;
 	}
@@ -2268,7 +2268,12 @@ function rewriteVectorConstructorArgs(src, messages)
 	{
 		if (node.kind !== 'call') { return null; }
 		var target = anParseType(node.ctor || node.name);
-		if (!target || target.kind !== 'vec') { return null; }
+		if (!target || (target.kind !== 'vec' && target.kind !== 'scalar')) { return null; }
+		if (target.kind === 'scalar')
+		{
+			var argType = node.args.length === 1 && node.args[0].type && anParseType(node.args[0].type);
+			return argType && argType.kind === 'vec' ? node.name + '(' + swizzled(node.args[0], render, 'x') + ')' : null;
+		}
 		if (node.args.some(function (arg) { return !arg.type || !anParseType(arg.type); })) { return null; }
 
 		var total = node.args.reduce(function (sum, arg) { return sum + components(arg.type); }, 0);

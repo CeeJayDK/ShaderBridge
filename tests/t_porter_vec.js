@@ -16,6 +16,14 @@ function run(stmt, messages)
 }
 
 // overflow handling
+check('int from vector takes its first component',run('return int(a2);'),'return int(a2.x);');
+check('float from an expression takes its first component',run('return float(a3+a3);'),'return float((a3+a3).x);');
+check('uint from vector takes its first component',run('return uint(a3);'),'return uint(a3.x);');
+check('bool from vector takes its first component',run('return bool(a4);'),'return bool(a4.x);');
+check('scalar constructors preserve whole-vector prefix increments',run('return int(++a3);'),'return int((++a3).x);');
+check('vector truncation preserves whole-vector prefix increments',run('return float2(++a3);'),'return float2((++a3).xy);');
+check('scalar conversions from scalars remain intact',run('return int(s);'),'return int(s);');
+check('invalid multi-argument scalar constructors are not repaired',run('return int(a2,s);'),'return int(a2,s);');
 check('float3 into float2', run('return float2(a3);'), 'return float2(a3.xy);');
 check('float4 into float3', run('return float3(a4);'), 'return float3(a4.xyz);');
 check('scalar then float3 into float3', run('return float3(s, a3);'), 'return float3(s, a3.xy);');
