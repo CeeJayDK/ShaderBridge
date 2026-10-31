@@ -412,6 +412,86 @@ function stepPrecision(ctx)
 	ctx.src = s;
 }
 
+function stepConditionalLoopBodies(ctx)
+{
+	// Alternative loop headers can open the same body in separate #if branches.
+	// Give each alternative its own copy of the shared tail so both remain
+	// selectable and the token-based passes see balanced blocks.
+	var changed = 0;
+	for (var round = 0; round < 100; round++)
+	{
+		var tokens = tokenizeSource(ctx.src), stack = [], groups = [];
+		tokens.forEach(function (t)
+		{
+			if (t.type !== 'preproc') { return; }
+			var directive = /^#\s*(if|ifdef|ifndef|elif|else|endif)\b/.exec(t.text);
+			if (!directive) { return; }
+			var kind = directive[1], top = stack[stack.length - 1];
+			if (kind === 'if' || kind === 'ifdef' || kind === 'ifndef') { stack.push({ parts: [{ header: t, from: t.end }], otherwise: false }); }
+			else if ((kind === 'elif' || kind === 'else') && top)
+			{
+				top.parts[top.parts.length - 1].to = t.start;
+				top.parts.push({ header: t, from: t.end });
+				if (kind === 'else') { top.otherwise = true; }
+			}
+			else if (kind === 'endif' && top)
+			{
+				stack.pop(); top.parts[top.parts.length - 1].to = t.start; top.end = t; groups.push(top);
+			}
+		});
+		var edit = null;
+		groups.some(function (group)
+		{
+			if (!group.otherwise || group.parts.length < 2) { return false; }
+			var valid = group.parts.every(function (part)
+			{
+				var body = tokens.filter(function (t) { return t.start >= part.from && t.start < part.to && t.type !== 'ws' && t.type !== 'comment' && t.type !== 'placeholder'; });
+				if (body.some(function (t) { return t.type === 'preproc'; })) { return false; }
+				var first = 0;
+				// Existing loop attributes are part of the chosen loop statement.
+				while (body[first] && body[first].text === '[')
+				{
+					while (body[first] && body[first].text !== ']') { first++; }
+					first++;
+				}
+				if (!body[first] || !/^(for|while)$/.test(body[first].text)) { return false; }
+				var braces = 0, parens = 0, brackets = 0, minimum = 0;
+				body.forEach(function (t)
+				{
+					if (t.text === '{') { braces++; }
+					else if (t.text === '}') { braces--; minimum = Math.min(minimum, braces); }
+					else if (t.text === '(') { parens++; }
+					else if (t.text === ')') { parens--; }
+					else if (t.text === '[') { brackets++; }
+					else if (t.text === ']') { brackets--; }
+				});
+				return braces === 1 && minimum === 0 && parens === 0 && brackets === 0;
+			});
+			if (!valid) { return false; }
+			var depth = 1, finish = -1;
+			for (var i = 0; i < tokens.length; i++)
+			{
+				var t = tokens[i];
+				if (t.start < group.end.end) { continue; }
+				// Do not move macro definitions or conditional scopes into alternatives.
+				if (t.type === 'preproc') { return false; }
+				if (t.type !== 'punct') { continue; }
+				if (t.text === '{') { depth++; }
+				else if (t.text === '}' && --depth === 0) { finish = t.end; break; }
+			}
+			if (finish < 0) { return false; }
+			var tail = ctx.src.slice(group.end.end, finish);
+			var text = group.parts.map(function (part) { return part.header.text + ctx.src.slice(part.from, part.to) + tail + '\n'; }).join('') + group.end.text + '\n';
+			edit = { from: group.parts[0].header.start, to: finish, text: text };
+			return true;
+		});
+		if (!edit) { break; }
+		ctx.src = ctx.src.slice(0, edit.from) + edit.text + ctx.src.slice(edit.to);
+		changed++;
+	}
+	if (changed) { ctx.messages.push({ level: 'info', text: 'Completed shared bodies in ' + changed + ' conditional loop-header group(s); all alternatives remain selectable.' }); }
+}
+
 function stepGlFragCoord(ctx)
 {
 	var s = ctx.src;
@@ -1728,16 +1808,17 @@ function stepD3D9BitOperations(ctx)
 var TRANSFORM_STEPS = [
 	{ name: 'extractComments', run: stepExtractComments },
 	{ name: 'removeDirectives', run: stepRemoveDirectives },
+	{ name: 'conditionalLoopBodies', run: stepConditionalLoopBodies, after: ['removeDirectives'], why: 'conditional loop blocks must be balanced before declaration and expression analysis' },
 	{ name: 'precision', run: stepPrecision },
 	{ name: 'glFragCoord', run: stepGlFragCoord },
 	{ name: 'uniformRedeclarations', run: stepUniformRedeclarations },
 	{ name: 'floatSuffix', run: stepFloatSuffix },
 	{ name: 'typeNames', run: stepTypeNames },
-	{ name: 'arrayDeclarators', run: stepArrayDeclarators, after: ['typeNames'], why: 'array type names must be in HLSL form before their dimensions move to the variable' },
+	{ name: 'arrayDeclarators', run: stepArrayDeclarators, after: ['typeNames', 'conditionalLoopBodies'], why: 'array type names and balanced scopes must be visible before dimensions move to the variable' },
 	{
 		name: 'structConstructors',
 		run: stepStructConstructors,
-		after: ['typeNames', 'arrayDeclarators'],
+		after: ['typeNames', 'arrayDeclarators', 'conditionalLoopBodies'],
 		why: 'member types must already be in HLSL form'
 	},
 	{ name: 'intrinsicNames', run: stepIntrinsicNames },
@@ -1745,7 +1826,7 @@ var TRANSFORM_STEPS = [
 	{ name: 'unsignedFloatConstants', run: stepUnsignedFloatConstants, after: ['typeNames'], why: 'floating-point constructor names must already be in HLSL form' },
 	{ name: 'compatibilityMacros', run: stepCompatibilityMacros, after: ['typeNames', 'reservedIdentifiers'], why: 'macro bodies must use the same type and identifier names as the expressions they expand into' },
 	{ name: 'voidParameters', run: stepVoidParameters, after: ['typeNames', 'compatibilityMacros'], why: 'function return types and macro-exposed headers must be visible to the signature scanner' },
-	{ name: 'splitGlobalDeclarators', run: stepSplitGlobalDeclarators, after: ['extractComments', 'arrayDeclarators'], why: 'it moves comment placeholders and needs array dimensions on each declarator' },
+	{ name: 'splitGlobalDeclarators', run: stepSplitGlobalDeclarators, after: ['extractComments', 'arrayDeclarators', 'conditionalLoopBodies'], why: 'it moves comment placeholders and needs balanced scopes and dimensions on each declarator' },
 	{
 		name: 'constToStaticConst',
 		run: stepConstToStaticConst,

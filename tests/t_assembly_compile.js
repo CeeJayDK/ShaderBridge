@@ -8,6 +8,7 @@ const porter = require('./load_porter.js')();
 
 const image = 'void mainImage(out vec4 c,vec2 p) { c=vec4(gain(p.x)); }';
 const cases = require('./nested_struct_cases.js').concat([
+	...[0,1].map(choice=>({name:'conditional_loop_header_'+choice,sources:['#define CHOICE '+choice+'\nfloat total(){float sum=0.;\n#if CHOICE\nfor(int i=0;i<3;i++){vec2 value=vec2(1.,2.)+float(i),\n#else\nfor(int i=0;i<2;i++){vec2 value=vec2(1.,2.)+float(i),\n#endif\nextra=vec2(0.);value*=mat2(1.,2.,3.,4.);sum+=value.x+value.y+extra.x;}\nreturn sum;}\nint mode=0;\nvoid mainImage(out vec4 c,vec2 p){mode=1;float result=total();\n#if CHOICE\nfloat expected=78.;\n#else\nfloat expected=42.;\n#endif\nbool ok=mode==1&&abs(result-expected)<.001;c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}']})),
 	{name:'commented_alias_object_matrix',sources:['#define V vec2 // alias comment\nV value;\nfloat count;mat2 basis=mat2(1.,2.,3.,4.);\n#define CHANGE (count+=1.,value*=basis)\n#define RESULT (CHANGE+vec2(1.,2.))\nvoid mainImage(out vec4 c,vec2 p){value=vec2(1.,2.);count=0.;V result=RESULT;bool ok=all(lessThan(abs(value-vec2(5.,11.)),vec2(.001)))&&all(lessThan(abs(result-vec2(6.,13.)),vec2(.001)))&&count==1.;c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}']},
 	// ReShade 6.8 mishandles bare do-while condition names/literals in HLSL.
 	// Use a comparison rvalue here so this case isolates return-path handling.

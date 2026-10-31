@@ -20,6 +20,10 @@ check('comments are taken out first and put back last', names[0] === 'extractCom
 // What is known about the order, written down here independently of the list itself. Each pair is
 // [earlier, later, why]. The list must agree with all of them.
 const KNOWN = [
+	['removeDirectives', 'conditionalLoopBodies', 'unsupported directives are removed first'],
+	['conditionalLoopBodies', 'arrayDeclarators', 'array analysis needs balanced loop bodies'],
+	['conditionalLoopBodies', 'structConstructors', 'struct analysis needs balanced loop bodies'],
+	['conditionalLoopBodies', 'splitGlobalDeclarators', 'global declarations need balanced function scopes'],
 	['typeNames', 'staticGlobals', 'global declaration types must use HLSL names'],
 	['compatibilityMacros', 'staticGlobals', 'macro-exposed declarations must be visible'],
 	['reorderFunctions', 'fallbackReturns', 'complete function bodies must be visible'],
@@ -159,6 +163,7 @@ check('two passes do not share anything', names2 === 'mainImage_BufA mainImage',
 // (or, for a step that only passes on information, changes the pass). A step that is skipped or never
 // exercised is found here.
 const EXAMPLES = {
+	conditionalLoopBodies: 'void mainImage(out vec4 c,vec2 p){\n#if CHOICE\nfor(int i=0;i<3;i++){\n#else\nfor(int i=0;i<2;i++){\n#endif\nc+=vec4(1.);}\n}',
 	fallbackReturns: 'float choose(float x){if(x>0.)return x;}void mainImage(out vec4 c,vec2 p){c=vec4(choose(p.x));}',
 	conditionalStatements: 'void mainImage(out vec4 c,vec2 p){float value=0.;p.x<1.?value=2.:value=3.;c=vec4(value);}',
 	volumeLookups: 'vec4 readVolume(sampler3D data,ivec3 p){return texelFetch(data,p,0);}void mainImage(out vec4 c,vec2 p){c=vec4(1.);}',

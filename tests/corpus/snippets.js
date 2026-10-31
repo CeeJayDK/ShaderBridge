@@ -1,6 +1,8 @@
 // Small GLSL idioms common in Shadertoy shaders. Each entry: [id, helpers (global code), body of mainImage].
 // Every one is valid GLSL ES 3.00 as Shadertoy accepts it; the porter must turn it into a compiling effect.
 module.exports = [
+	['conditional_loop_header_one','#define CHOICE 1\nfloat total(){float sum=0.;\n#if CHOICE\nfor(int i=0;i<3;i++){float value=1.,\n#else\nfor(int i=0;i<2;i++){float value=2.,\n#endif\nextra=0.;sum+=value+extra;}\nreturn sum;}\n','fragColor=vec4(total());'],
+	['conditional_loop_header_zero','#define CHOICE 0\nfloat total(){float sum=0.;\n#if CHOICE\nfor(int i=0;i<3;i++){float value=1.,\n#else\nfor(int i=0;i<2;i++){float value=2.,\n#endif\nextra=0.;sum+=value+extra;}\nreturn sum;}\n','fragColor=vec4(total());'],
 	['commented_type_alias_globals','#define V vec3 // type alias\nV value;\n','value=vec3(.25,.5,.75);fragColor=vec4(value,1.);'],
 	['object_matrix_macro','vec2 value;mat2 basis=mat2(1.,2.,3.,4.);\n#define CHANGE (value*=basis)\n#define RESULT (CHANGE+vec2(1.,2.))\n','value=vec2(1.,2.);vec2 result=RESULT;fragColor=vec4(result,0.,1.);'],
 	['missing_scalar_return','float choose(int mode){if(mode==1)return .25;if(mode==2)return .75;}\n','fragColor=vec4(choose(int(fragCoord.x)%3));'],
