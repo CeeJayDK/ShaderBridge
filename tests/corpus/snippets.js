@@ -1,6 +1,8 @@
 // Small GLSL idioms common in Shadertoy shaders. Each entry: [id, helpers (global code), body of mainImage].
 // Every one is valid GLSL ES 3.00 as Shadertoy accepts it; the porter must turn it into a compiling effect.
 module.exports = [
+	['commented_type_alias_globals','#define V vec3 // type alias\nV value;\n','value=vec3(.25,.5,.75);fragColor=vec4(value,1.);'],
+	['object_matrix_macro','vec2 value;mat2 basis=mat2(1.,2.,3.,4.);\n#define CHANGE (value*=basis)\n#define RESULT (CHANGE+vec2(1.,2.))\n','value=vec2(1.,2.);vec2 result=RESULT;fragColor=vec4(result,0.,1.);'],
 	['missing_scalar_return','float choose(int mode){if(mode==1)return .25;if(mode==2)return .75;}\n','fragColor=vec4(choose(int(fragCoord.x)%3));'],
 	['missing_vector_return','vec3 choose(bool selected){if(selected)return vec3(.25,.5,.75);}\n','fragColor=vec4(choose(fragCoord.x<32.),1.);'],
 	['conditional_comma_matrix','','vec2 q=vec2(1.,2.);float count=0.;bool selected=fragCoord.x<32.;selected?count+=1.,q*=mat2(1.,2.,3.,4.):q;fragColor=vec4(q,count,1.);'],

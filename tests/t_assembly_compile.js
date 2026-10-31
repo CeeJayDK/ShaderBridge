@@ -8,6 +8,7 @@ const porter = require('./load_porter.js')();
 
 const image = 'void mainImage(out vec4 c,vec2 p) { c=vec4(gain(p.x)); }';
 const cases = require('./nested_struct_cases.js').concat([
+	{name:'commented_alias_object_matrix',sources:['#define V vec2 // alias comment\nV value;\nfloat count;mat2 basis=mat2(1.,2.,3.,4.);\n#define CHANGE (count+=1.,value*=basis)\n#define RESULT (CHANGE+vec2(1.,2.))\nvoid mainImage(out vec4 c,vec2 p){value=vec2(1.,2.);count=0.;V result=RESULT;bool ok=all(lessThan(abs(value-vec2(5.,11.)),vec2(.001)))&&all(lessThan(abs(result-vec2(6.,13.)),vec2(.001)))&&count==1.;c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}']},
 	// ReShade 6.8 mishandles bare do-while condition names/literals in HLSL.
 	// Use a comparison rvalue here so this case isolates return-path handling.
 	{name:'return_flow_control',sources:['float early(bool stop,bool repeat){do{if(stop)break;return .5;}while(repeat != false);}\nfloat once(bool repeat){do{return .75;}while(repeat != false);}\nfloat forever(){for(;;){return 1.;}}\nvoid mainImage(out vec4 c,vec2 p){bool selected=p.x<iResolution.x*.5;bool repeat=p.y<0.;bool ok=early(selected,repeat)==(selected?0.:.5)&&once(repeat)==.75&&forever()==1.;c=ok?vec4(0.,1.,0.,1.):vec4(1.,0.,0.,1.);}']},

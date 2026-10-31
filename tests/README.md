@@ -7,7 +7,7 @@ Run with Node (no dependencies):
 | Suite | What it checks |
 |---|---|
 | `t_types.js` | the analyzer's type inference and scoping (64 cases) |
-| `t_analyzer.js` | what each phase of the analysis adds (tokens, dead branches, macros, structs, signatures, scopes, lookup, expression walk) and that the phases need each other in order (65) |
+| `t_analyzer.js` | what each phase of the analysis adds (tokens, dead branches, macros, structs, signatures, scopes, lookup, expression walk) and that the phases need each other in order (68) |
 | `t_structs.js` | nested struct values, constructors, deep members, field names and comments, conditional declarations, and aliased out/inout updates (20) |
 | `t_porter_mat.js` | `rewriteInlineMatrixMul`, loaded exactly as it ships, including file-scope initialisers (33) |
 | `t_porter_vec.js` | `rewriteVectorConstructorArgs` (25) |
@@ -17,9 +17,9 @@ Run with Node (no dependencies):
 | `t_texelfetch.js` | `texelFetch` / `textureSize`, and row-mirrored fetches from Vflip textures (20) |
 | `t_samplers.js` | sampler and texture names clashing across passes, macro aliases, hoisted initializers, unconnected helper inputs, and buffer mip chains (21) |
 | `t_common.js` | Common declarations are shared or renamed across passes as needed; arrays stay local to each pass; macro environments, channel resolutions, indentation, comment braces, and nested else-if blocks preserve each pass's meaning; only passes contributing to Image are selected (55) |
-| `t_glsl_compat.js` | output defaults and inout preservation, reserved words, `precision`, static globals, array and matrix constructors, conditional and symbolic array lengths, comparison functions, switch, macro typing, definition order and name collisions, rectangular matrix expressions, `inverse` / `outerProduct` / `matrixCompMult`, texture lookups, visual sample-rate declarations, `gl_FragCoord`, conditional fallback returns, file-scope detection, half-float unpacking, dynamic writes to vector components, and DX9 constant shifts and low-bit masks (342) |
+| `t_glsl_compat.js` | output defaults and inout preservation, reserved words, `precision`, static globals, array and matrix constructors, conditional and symbolic array lengths, comparison functions, switch, macro typing, definition order and name collisions, rectangular matrix expressions, `inverse` / `outerProduct` / `matrixCompMult`, texture lookups, visual sample-rate declarations, `gl_FragCoord`, conditional fallback returns, file-scope detection, half-float unpacking, dynamic writes to vector components, and DX9 constant shifts and low-bit masks (348) |
 | `t_functions.js` | ReShade FX has no forward declarations: declarations are removed and callers moved after the functions they call (21) |
-| `t_pipeline.js` | the transform is a list of named steps: the order that matters is declared and checked, and every step proves on its own example that it does something (139) |
+| `t_pipeline.js` | the transform is a list of named steps: the order that matters is declared and checked, and every step proves on its own example that it does something (141) |
 | `t_loops.js` | DX9 for-loop hints, large constant loops, nested and unbraced bodies, explicit attributes, function reordering, and specialized texture helpers reached from loops, and array-write unrolling (30) |
 | `t_frames.js` | an effect-local frame counter starts at zero after loading, uses separate read/write textures, and runs before shader passes (5) |
 | `t_cubemap.js` | the cubemap helper agrees with the OpenGL cube map table; generated cubemap inputs, render targets, face-local entry points and feedback are connected correctly (32) |
@@ -27,8 +27,8 @@ Run with Node (no dependencies):
 | `t_returns.js` | numeric fall-through returns, complete branches, loop exits, and preservation of existing returns (17) |
 | `t_contrast.js` | the page is readable: every text colour has enough contrast, and the critical styles agree with the stylesheet (70) |
 | `t_standalone.js` | the .fx includes nothing; author attribution precedes porter credits, metadata stays inside comments, and frame duration uses seconds (20) |
-| `corpus/run.js` | 178 small GLSL idioms, each ported and compiled with the real ReShade compiler; synthetic DX9 loops and bit operations also check the instruction-slot budget on Windows |
-| `t_assembly_compile.js` | 45 complete synthetic effects, including nested structs with value copies and out/inout aliases, conditional array lengths and shared tables, buffer mipmaps, unconnected helper samplers, generated cubemap feedback, multipass macro isolation, resource aliases, hoisted texture reads, channel resolutions, and metadata; every entry point compiles for DX11; 41 also compile for DX9 on Windows (two dynamic array-write cases and two compute-volume cases require a modern API) |
+| `corpus/run.js` | 180 small GLSL idioms, each ported and compiled with the real ReShade compiler; synthetic DX9 loops and bit operations also check the instruction-slot budget on Windows |
+| `t_assembly_compile.js` | 46 complete synthetic effects, including nested structs with value copies and out/inout aliases, conditional array lengths and shared tables, buffer mipmaps, unconnected helper samplers, generated cubemap feedback, multipass macro isolation, resource aliases, hoisted texture reads, channel resolutions, and metadata; every entry point compiles for DX11; 42 also compile for DX9 on Windows (two dynamic array-write cases and two compute-volume cases require a modern API) |
 | `roundtrip.js` | the lexer must reproduce every shader source exactly |
 
 ## Environment

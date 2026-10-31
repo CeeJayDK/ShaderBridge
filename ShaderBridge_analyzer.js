@@ -200,6 +200,9 @@ function anScanMacros(an)
 		if (t.type !== 'preproc') { return; }
 		// a backslash-continued #define is one token; join its lines and drop comments
 		var text = AN.replaceSourceComments(t.text.replace(/\\\r?\n/g, ' '), function () { return ' '; });
+		// During conversion, extracted comments are placeholders rather than comment
+		// tokens. Ignore them in macro types without changing quoted macro data.
+		text = text.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|«[⁰¹²³⁴⁵⁶⁷⁸⁹]+»/g, function (m) { return m[0] === '«' ? ' ' : m; });
 		var m = /^#\s*define\s+([A-Za-z_]\w*)(\()?([^\n]*)/.exec(text);
 		if (m && !m[2]) { A.macros[m[1]] = { body: m[3].trim(), type: undefined }; }
 		else if (m)

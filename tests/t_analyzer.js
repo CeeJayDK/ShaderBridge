@@ -11,6 +11,10 @@ function check(label, ok, detail)
 	if (!ok) { bad++; console.log('FAIL', label, detail ? '\n' + detail : ''); }
 }
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const placeholderAlias=porter.analyzeSource('#define V float3«⁰»\n#define LABEL "«¹»"\nV globalValue;\nV read(V value){return value;}');
+check('comment placeholders do not hide macro type aliases',placeholderAlias.decls.some(d=>d.global&&d.name==='globalValue'&&d.type==='float3'));
+check('commented aliases retain function and parameter types',placeholderAlias.functions.read[0].ret==='float3'&&placeholderAlias.functions.read[0].params[0].type==='float3');
+check('quoted placeholder text remains macro data',placeholderAlias.macros.LABEL.body==='"«¹»"');
 const conditionalComma=porter.analyzeSource('void f(bool choose){float x=0.;float y=0.;float value=choose?x=1.,y=2.:x=3.;float keep=x+y;}');
 const conditionalRoots=[];conditionalComma.eachExpression(n=>conditionalRoots.push(n));
 check('a conditional middle arm accepts a comma sequence',conditionalRoots[2].kind==='ternary'&&conditionalRoots[2].a.kind==='sequence'&&conditionalRoots[2].a.items.length===2);

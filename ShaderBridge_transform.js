@@ -760,31 +760,23 @@ function stepConstInitialisers(ctx)
 
 function stepStaticGlobals(ctx)
 {
-	var s = ctx.src;
-	// ── Mutable file-scope globals need 'static' in HLSL ────────────────────
-	// Pass 1: match type declarations at start of line
-	var structNames = [];
-	s.replace(/\bstruct\s+(\w+)\s*\{/g, function (_, name) { structNames.push(name); return _; });
-	var globalTypes = 'float[234x]*|int[234]?|uint[234]?|bool' + structNames.map(function (n) { return '|' + n; }).join('');
-	var globals = fileScopeTokenOffsets(s);
-	s = s.replace(new RegExp('^([ \\t]*)((?:' + globalTypes + ')\\s+)([a-zA-Z_]\\w*)\\s*(?=[,;=\\s\\[])', 'gm'),
-		function (match, indent, type, name, offset, str) {
-			if (!globals[offset + indent.length]) { return match; }
-			if (/^\s*\(/.test(str.slice(offset + match.length))) { return match; }
-			return indent + 'static ' + match.slice(indent.length);
-		});
-	// Pass 2: handle  ;type  declarations on same line (e.g. float A,D,E;vec3 B,C;)
-	globals = fileScopeTokenOffsets(s);
-	s = s.replace(/;([ \t]*)(float[234x]*|int[234]?|uint[234]?|bool)(\s+)([a-zA-Z_]\w*)\s*(?=[,;=\s])/gm,
-		function (match, indent, type, space, name, offset, str) {
-			if (!globals[offset]) { return match; }
-			if (/^\s*\(/.test(str.slice(offset + match.length))) { return match; }
-			var lineStart = str.lastIndexOf('\n', offset) + 1;
-			if (/^\s+/.test(str.slice(lineStart, offset + 1))) { return match; } // indented
-			return ';' + indent + 'static ' + type + space + name;
-		});
-	// ── iTime is kept as-is; assemble.js defines it directly ─────────────────
-	ctx.src = s;
+	// Use resolved declaration types, including macro aliases, rather than the
+	// spelling at the start of a line. Locals and explicit uniforms stay intact.
+	var A = analyzeSource(ctx.src), insertions = [], seen = {};
+	function token(i) { return A.tokens[A.sig[i]]; }
+	A.decls.forEach(function (decl)
+	{
+		var baseType = decl.type.replace(/(?:\[\])+$/, '');
+		if (!decl.global || (!anParseType(baseType) && !A.structs[baseType])) { return; }
+		var start = decl.declAt - 1;
+		if (!token(start) || token(start).type !== 'ident') { return; } // later names in a grouped declaration
+		while (token(start - 1) && /^(static|const|uniform|precise)$/.test(token(start - 1).text)) { start--; }
+		var qualifiers = A.sig.slice(start, decl.declAt).map(function (i) { return A.tokens[i].text; });
+		if (qualifiers.indexOf('static') !== -1 || qualifiers.indexOf('uniform') !== -1) { return; }
+		var at = token(start).start;
+		if (!seen[at]) { seen[at] = true; insertions.push(at); }
+	});
+	insertions.sort(function (a,b) { return b-a; }).forEach(function (at) { ctx.src = ctx.src.slice(0,at) + 'static ' + ctx.src.slice(at); });
 }
 
 function stepUnreachableCode(ctx)
@@ -1769,8 +1761,8 @@ var TRANSFORM_STEPS = [
 	{
 		name: 'staticGlobals',
 		run: stepStaticGlobals,
-		after: ['splitGlobalDeclarators'],
-		why: 'it looks for one variable per declaration'
+		after: ['splitGlobalDeclarators', 'typeNames', 'compatibilityMacros'],
+		why: 'resolved types and complete declarations must be visible before file-scope variables are qualified'
 	},
 	{
 		name: 'unreachableCode',
@@ -2316,9 +2308,17 @@ function expandMatrixExpressionMacros(src, messages)
 		var changed = 0;
 		var result = rewriteExpressions(src, function (node, render)
 		{
-			if (node.kind !== 'call') { return null; }
+			if (node.kind !== 'call' && node.kind !== 'ident') { return null; }
 			var macro = A.macros[node.name];
-			if (!macro || definitions[node.name] !== 1 || !macro.fn || !macro.params || macro.params.length !== node.args.length || /[#{};]/.test(macro.body)) { return null; }
+			if (!macro || definitions[node.name] !== 1 || /[#{};]/.test(macro.body)) { return null; }
+			if (node.kind === 'ident')
+			{
+				var nestedObject = tokenizeSource(macro.body).some(function (t) { return t.type === 'ident' && A.macros[t.text]; });
+				if (macro.fn || (!/\*/.test(macro.body) && !nestedObject) || !matrixBody(node.name, [])) { return null; }
+				changed++;
+				return '(' + macro.body + ')';
+			}
+			if (!macro.fn || !macro.params || macro.params.length !== node.args.length) { return null; }
 			if (macro.params.some(function (p) { return !/^[A-Za-z_]\w*$/.test(p); })) { return null; }
 			var hasProduct = /\*/.test(macro.body);
 			var hasNestedMacro = tokenizeSource(macro.body).some(function (t) { return t.type === 'ident' && A.macros[t.text] && A.macros[t.text].fn; });

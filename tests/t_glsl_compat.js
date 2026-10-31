@@ -17,6 +17,13 @@ function port(helpers, body)
 	return { out: r.src, messages: messages };
 }
 const has = (r, text) => r.out.indexOf(text) >= 0;
+function staticGlobals(src){const ctx={src};porter.stepStaticGlobals(ctx);return ctx.src;}
+check('macro aliases are accepted as mutable global types',staticGlobals('#define V float3\nV value;').includes('static V value;'));
+check('globals following a function on the same line are static',staticGlobals('float f(){return 1.;}float value;').includes('}static float value;'));
+check('explicit uniforms retain their storage',staticGlobals('uniform float gain;')==='uniform float gain;');
+check('global constants retain const with static storage',staticGlobals('const float gain=1.;')==='static const float gain=1.;');
+check('locals and struct fields retain their storage',staticGlobals('struct Item{float value;};void f(){float localValue;}')==='struct Item{float value;};void f(){float localValue;}');
+check('global qualification is idempotent',staticGlobals(staticGlobals('float value;'))==='static float value;');
 function arrayDeclaration(src) { const ctx={src:src};porter.stepArrayDeclarators(ctx);return ctx.src; }
 check('array dimensions on a type move onto the variable',arrayDeclaration('float[3] a;')==='float a[3];');
 check('grouped array declarations each retain their dimensions',arrayDeclaration('float[3] a,b;')==='float a[3],b[3];');

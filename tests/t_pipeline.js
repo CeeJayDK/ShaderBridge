@@ -20,6 +20,8 @@ check('comments are taken out first and put back last', names[0] === 'extractCom
 // What is known about the order, written down here independently of the list itself. Each pair is
 // [earlier, later, why]. The list must agree with all of them.
 const KNOWN = [
+	['typeNames', 'staticGlobals', 'global declaration types must use HLSL names'],
+	['compatibilityMacros', 'staticGlobals', 'macro-exposed declarations must be visible'],
 	['reorderFunctions', 'fallbackReturns', 'complete function bodies must be visible'],
 	['glslHelpers', 'fallbackReturns', 'generated helpers must be visible'],
 	['fallbackReturns', 'd3d9ForLoops', 'return analysis must precede conditional loop directives'],
