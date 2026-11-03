@@ -1,6 +1,7 @@
 // Small GLSL idioms common in Shadertoy shaders. Each entry: [id, helpers (global code), body of mainImage].
 // Every one is valid GLSL ES 3.00 as Shadertoy accepts it; the porter must turn it into a compiling effect.
 module.exports = [
+	['inline_struct_instances','struct Grid{vec2 position;float value;} grid,others[2];\n','grid.position=fragCoord;others[0].value=.5;fragColor=vec4(grid.position,others[0].value,1.);'],
 	['array_return','float[2] make(float x){float a[2]=float[2](x,x+1.);return a;}\n','float a[2]=make(fragCoord.x);fragColor=vec4(a[1]);'],
 	['matrix_array_return','mat2[2] make(){mat2 a[2]=mat2[2](mat2(1.,2.,3.,4.),mat2(2.));a[0]=a[0]*a[1];return a;}\n','mat2 a[2]=make();fragColor=vec4(a[0]*fragCoord,0.,1.);'],
 	['macro_bits','#define BITS(x) floatBitsToInt(x)\n#define FLOAT(x) intBitsToFloat(x)\n','fragColor=vec4(FLOAT(BITS(fragCoord.x)));'],

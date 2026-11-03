@@ -845,15 +845,20 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 		if (!passTag) { return { src: src, renames: renames }; }
 		function note(kind, name) {
 			renames[name] = name + passTag;
-			messages.push({ level: 'info', text: '[' + passLabel + '] ' + kind + ' \'' + name + (kind === 'array' ? '\' is local to an earlier pass; this pass uses ' : '\' is declared differently in an earlier pass; this pass uses ') + renames[name] + '.' });
+			messages.push({ level: 'info', text: '[' + passLabel + '] ' + kind + ' \'' + name + (kind === 'array' || kind === 'struct value' ? '\' is local to an earlier pass; this pass uses ' : '\' is declared differently in an earlier pass; this pass uses ') + renames[name] + '.' });
 		}
-		// Keep arrays local even when their text matches: conditional definitions and large
-		// constant tables cannot safely use the scalar declaration de-duplication below.
-		var arrays = Object.create(null);
-		analyzeSource(src).decls.forEach(function (d) { if (d.global && /\[\]$/.test(d.type)) { arrays[d.name]=true; } });
+		// Keep aggregate values local even when their text matches: conditional arrays
+		// and mutable struct instances cannot use primitive scalar de-duplication.
+		var arrays = Object.create(null), analysis = analyzeSource(src);
+		analysis.decls.forEach(function (d)
+		{
+			if (!d.global) { return; }
+			if (/\[\]$/.test(d.type)) { arrays[d.name] = 'array'; }
+			else if (analysis.structs[d.type]) { arrays[d.name] = 'struct value'; }
+		});
 		Object.keys(arrays).forEach(function (name)
 		{
-			if (seenArrays[name] || seenGlobals[name] !== undefined) { note('array',name); }
+			if (seenArrays[name] || seenGlobals[name] !== undefined) { note(arrays[name],name); }
 		});
 		src.replace(structDefinitionPattern(), function (match, name) {
 			var key = match.replace(/\s+/g, ' ').trim();

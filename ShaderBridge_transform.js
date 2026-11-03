@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.5.6';
+var PORTER_VERSION = '3.5.7';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -535,6 +535,22 @@ function stepTypeNames(ctx)
 function stepStructConstructors(ctx)
 {
 	var s = ctx.src;
+	// GLSL permits instances after a named struct body. FX requires a separate
+	// declaration; expose it before constructors and global storage are analyzed.
+	var fileScope = fileScopeTokenOffsets(s), parts = tokenizeSource(s).filter(function (t) { return t.type !== 'ws' && t.type !== 'comment' && t.type !== 'placeholder' && t.type !== 'preproc'; }), insertions = [];
+	for (var i = 0; i < parts.length - 3; i++)
+	{
+		if (parts[i].text !== 'struct' || !fileScope[parts[i].start] || parts[i + 1].type !== 'ident' || parts[i + 2].text !== '{') { continue; }
+		var depth = 1, end = i + 3;
+		for (; end < parts.length; end++)
+		{
+			if (parts[end].text === '{') { depth++; }
+			else if (parts[end].text === '}' && --depth === 0) { break; }
+		}
+		if (parts[end + 1] && parts[end + 1].type === 'ident') { insertions.push({ at: parts[end].end, text: '; ' + parts[i + 1].text + ' ' }); }
+		i = end;
+	}
+	insertions.reverse().forEach(function (e) { s = s.slice(0, e.at) + e.text + s.slice(e.at); });
 	var messages = ctx.messages;
 	// ── Struct constructor syntax: Name(a,b,c) → Name_ctor(a,b,c) ────────────
 	// HLSL has no positional struct constructors. Generate a helper function for

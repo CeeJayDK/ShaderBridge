@@ -49,6 +49,10 @@ check('ordinary array declarations remain intact',arrayDeclaration('float a[3];'
 check('comments around dimensions survive',arrayDeclaration('float /* a */ [3] /* b */ values;')==='float /* a */  /* b */ values[3];');
 check('quoted array text remains data',arrayDeclaration('#define LABEL "float[3] a"\nfloat[3] values;')==='#define LABEL "float[3] a"\nfloat values[3];');
 check('struct array element types are recognized',arrayDeclaration('struct Item{float x;};Item[2] a;')==='struct Item{float x;};Item a[2];');
+const inlineStruct=port('struct Grid{vec2 position;float count;} first,others[2];\n','first.position=vec2(1.,2.);others[1].count=3.;fragColor=vec4(first.position,others[1].count,1.);');
+check('inline struct instances are separated from the type definition',/struct Grid[\s\S]*?};\s*static Grid first;/.test(inlineStruct.out),inlineStruct.out);
+check('inline struct instance arrays retain their dimensions',inlineStruct.out.includes('static Grid others[2];'),inlineStruct.out);
+check('standalone struct definitions stay standalone',!port('struct Grid{float count;};\n','Grid g;g.count=1.;fragColor=vec4(g.count);').out.includes('Grid ;'));
 const arrayReturnSource='float[2] make(float x);\nfloat[2] make(float x){float a[2];a[0]=x;a[1]=x+1.;if(x>0.)return a;return a;}\nfloat make(float2 x){return x.x;}\nvoid f(){float a[2]=make(1.);float b=make(float2(2.,3.));}';
 const arrayReturnOut=arrayDeclaration(arrayReturnSource);
 check('array return prototypes and definitions share one wrapper', (arrayReturnOut.match(/struct ST_ArrayReturn_/g)||[]).length===1);
