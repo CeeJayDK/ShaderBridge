@@ -99,11 +99,11 @@ check('the global is declared once across passes', (out.match(/static float4 ST_
 out = porter.assembleFxFile([makePass('image', bufSrc)], true, [], null);
 check('a pass that never uses gl_FragCoord has no assignment', !/ST_FragCoord/.test(out));
 
-// iChannelTime is stubbed to iTime, so using only iChannelTime must still declare iTime
+// Connected channel clocks use iTime, while the channel values are emitted per pass.
 const ub = (names) => porter.buildUniformBlock(new Set(names));
 let block = ub(['iChannelTime']);
 check('iChannelTime alone also declares the timer behind iTime', /uniform float iTimeMS < source = "timer"; >;/.test(block) && /#define iTime \(iTimeMS \* 0\.001\)/.test(block), block);
-check('and iTime comes before the stub that uses it', block.indexOf('#define iTime ') >= 0 && block.indexOf('#define iTime ') < block.indexOf('#define iChannelTime'), block);
+check('channel clocks are deferred until pass channel mappings are known', block.indexOf('#define iTime ') >= 0 && block.indexOf('#define iChannelTime') < 0, block);
 block = ub(['iChannelTime', 'iTime']);
 check('with both, iTime is declared once', (block.match(/uniform float iTimeMS/g) || []).length === 1);
 check('with neither there is no timer and no stub', ub(['iResolution']).indexOf('iTimeMS') < 0 && ub(['iResolution']).indexOf('iChannelTime') < 0);

@@ -43,7 +43,7 @@ function selectImageDependencies(passes)
 function buildUniformBlock(usedUniforms) {
 	var lines = [];
 
-	// iChannelTime is stubbed to iTime, so a shader that uses only iChannelTime needs iTime declared too
+	// Connected channel clocks use iTime; per-pass declarations keep empty channels at zero.
 	if (usedUniforms.has('iChannelTime') && !usedUniforms.has('iTime')) {
 		usedUniforms = new Set(usedUniforms);
 		usedUniforms.add('iTime');
@@ -97,12 +97,7 @@ function buildUniformBlock(usedUniforms) {
 		lines.push('#define iMousePosST float2(iMousePos.x, ST_FLIP_Y ? BUFFER_HEIGHT - iMousePos.y : iMousePos.y)');
 		lines.push('#define iMouse float4(iMousePosST, iMouseBtn0 ? iMousePosST : float2(0.0, 0.0))');
 	}
-	if (usedUniforms.has('iChannelTime')) {
-		sep();
-		lines.push('// iChannelTime — stubbed to iTime (no video input support)');
-		lines.push('#define iChannelTime float4(iTime, iTime, iTime, iTime)');
-	}
-	// iChannelResolution is emitted per-pass after samplers (see assembleFxFile)
+	// iChannelTime and iChannelResolution are emitted per-pass after samplers.
 
 	return lines.join('\n');
 }
@@ -969,6 +964,13 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 			lines.push('// iChannelResolution — per-channel dimensions');
 			lines.push(chanResBlock);
 			lines.push('');
+		}
+		if (p.usedUniforms && p.usedUniforms.has('iChannelTime')) {
+			var timeName = (transformedPasses.length > 1 ? (isBuf ? bufLabels[p.id] : 'Image') + '_' : '') + 'iChannelTime';
+			resourceRenames.iChannelTime = timeName;
+			var clocks = [0, 1, 2, 3].map(function (ci) { return effectiveChannels[ci] && effectiveChannels[ci] !== 'none' ? 'iTime' : '0.0'; });
+			lines.push('// Empty channels have no playback clock; connected channels use elapsed time.');
+			lines.push('#define ' + timeName + ' float4(' + clocks.join(', ') + ')', '');
 		}
 		if (Object.keys(resourceRenames).length) { passSrc = renameNamesEverywhere(passSrc, resourceRenames); }
 

@@ -171,5 +171,12 @@ r=assemble([arrayCommon,arrayCommon]);
 check('large Common arrays receive pass-local names', /weights_IMAGE\[128\]/.test(r.out) && /return weights_IMAGE\[/.test(r.out));
 check('helpers using pass-local arrays are not merged', /gain_IMAGE\(/.test(r.out));
 
+const clockSource='float clock(){return iChannelTime[0];}\nvoid mainImage(out vec4 c,vec2 p){c=vec4(clock());}';
+const clockPasses=[['bufA',['none']],['image',['bufA','none']]].map(([id,channels])=>Object.assign({id,channels,usedUniforms:new Set(['iChannelTime'])},porter.transformGLSL(clockSource,[],id)));
+const clockOut=porter.assembleFxFile(clockPasses,true,[],null);
+check('empty channel clocks stay at zero',clockOut.includes('#define BufA_iChannelTime float4(0.0, 0.0, 0.0, 0.0)'));
+check('connected clocks remain pass-local',clockOut.includes('#define Image_iChannelTime float4(iTime, 0.0, 0.0, 0.0)'));
+check('clock-dependent helpers are not incorrectly shared between passes',clockOut.includes('return BufA_iChannelTime[0]')&&clockOut.includes('return Image_iChannelTime[0]'));
+check('channel clocks declare the timer when needed',clockOut.includes('uniform float iTimeMS'));
 console.log((total - bad) + '/' + total + ' common-tab tests OK');
 process.exit(bad ? 1 : 0);
