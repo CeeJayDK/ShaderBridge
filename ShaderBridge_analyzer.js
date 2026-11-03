@@ -32,6 +32,13 @@ var AN_FLOAT4_RESULT = 'tex2D tex2Dlod tex2Dgrad tex2Dbias tex2Dfetch tex2Dproj 
 function anBuiltinType(name, args)
 {
 	var t0 = args[0] || null, t1 = args[1] || null, t2 = args[2] || null;
+	var bitResult = { floatBitsToInt: 'int', asint: 'int', floatBitsToUint: 'uint', asuint: 'uint', intBitsToFloat: 'float', uintBitsToFloat: 'float', asfloat: 'float' }[name];
+	if (bitResult)
+	{
+		var bitArg = t0 && anParseType(t0);
+		return bitArg && bitArg.cols === 1 ? anVec(bitResult, bitArg.rows) : null;
+	}
+	if (name === 'roundEven') { return t0; }
 	if (AN_SAME_AS_ARG0.indexOf(name) !== -1)
 	{
 		if (name === 'step') { return t1; }

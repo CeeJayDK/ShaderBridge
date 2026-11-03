@@ -233,6 +233,14 @@ check('roundEven → round', gb('x = roundEven(y);') === 'x = round(y);');
 check('floatBitsToInt → asint', gb('i = floatBitsToInt(f);') === 'i = asint(f);');
 check('floatBitsToUint → asuint', gb('u = floatBitsToUint(f);') === 'u = asuint(f);');
 check('intBitsToFloat / uintBitsToFloat → asfloat', gb('f = intBitsToFloat(i) + uintBitsToFloat(u);') === 'f = asfloat(i) + asfloat(u);');
+check('renamed bit built-ins are converted inside macro bodies',gb('#define BITS(x) floatBitsToInt(x)\n').includes('#define BITS(x) asint(x)'));
+check('object-like built-in aliases are converted',gb('#define BITS floatBitsToUint\n').includes('#define BITS asuint'));
+check('macro formal parameters keep their names and references',gb('#define APPLY(floatBitsToInt) floatBitsToInt(1.)\n')==='#define APPLY(floatBitsToInt) floatBitsToInt(1.)\n');
+check('user-defined built-in macros keep their call sites',gb('#define floatBitsToInt(x) int(x)\nint n=floatBitsToInt(1.);')==='#define floatBitsToInt(x) int(x)\nint n=floatBitsToInt(1.);');
+check('quoted macro text is preserved',gb('#define LABEL "floatBitsToInt"\n')==='#define LABEL "floatBitsToInt"\n');
+check('bit reinterpretation preserves scalar and vector result widths',porter.anBuiltinType('floatBitsToInt',['float'])==='int'&&porter.anBuiltinType('asuint',['float3'])==='uint3'&&porter.anBuiltinType('asfloat',['int2'])==='float2');
+r=port('#define BITS(x) floatBitsToInt(x)\n#define FLOAT(x) intBitsToFloat(x)\n','fragColor=vec4(FLOAT(BITS(fragCoord.x)));');
+check('macro bit results retain scalar typing for constructor broadcasts',has(r,'float4(FLOAT(BITS(fragCoord.x)), FLOAT(BITS(fragCoord.x)), FLOAT(BITS(fragCoord.x)), FLOAT(BITS(fragCoord.x)))'),r.out);
 r = port('', 'bool b = all(greaterThan(fragCoord, vec2(1.))) && any(lessThanEqual(fragCoord, vec2(5.))); fragColor = vec4(float(b));');
 check('through the pipeline', has(r, 'all((fragCoord > (float2(1., 1.))))') && has(r, 'any((fragCoord <= (float2(5., 5.))))'), r.out);
 

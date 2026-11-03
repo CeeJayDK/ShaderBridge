@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.5.4';
+var PORTER_VERSION = '3.5.5';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -3252,9 +3252,16 @@ var GLSL_RENAMED_BUILTINS = { roundEven: 'round', floatBitsToInt: 'asint', float
 
 function rewriteGlslBuiltins(src)
 {
+	var macroDefinitions = Object.create(null);
+	tokenizeSource(src).forEach(function (t)
+	{
+		var definition = t.type === 'preproc' && /^#\s*define\s+(\w+)/.exec(t.text);
+		if (definition) { macroDefinitions[definition[1]] = true; }
+	});
 	function definedByShader(name)
 	{
-		return new RegExp('\\b(?:void|bool[234]?|int[234]?|uint[234]?|float[234]?(?:x[234])?|\\w+)\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{').test(src);
+		return new RegExp('\\b(?:void|bool[234]?|int[234]?|uint[234]?|float[234]?(?:x[234])?|\\w+)\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{').test(src)
+			|| !!macroDefinitions[name];
 	}
 
 	// an operand is used as is when it is a plain name or already wrapped in one pair of parentheses
@@ -3313,7 +3320,21 @@ function rewriteGlslBuiltins(src)
 
 	var renames = {};
 	Object.keys(GLSL_RENAMED_BUILTINS).forEach(function (name) { if (!definedByShader(name)) { renames[name] = GLSL_RENAMED_BUILTINS[name]; } });
-	return renameIdentifiers(rewrite(src), renames);
+	return tokenizeSource(renameIdentifiers(rewrite(src), renames)).map(function (token)
+	{
+		if (token.type !== 'preproc') { return token.text; }
+		// Rename built-ins in replacement lists too, keeping macro names, formal
+		// parameters, strings and other directives under preprocessor control.
+		return token.text.replace(/^(#\s*define\s+([A-Za-z_]\w*)(?:\(([^)]*)\))?)([\s\S]*)$/, function (all, head, name, params, body)
+		{
+			var localRenames = Object.assign({}, renames);
+			(params || '').split(',').forEach(function (p) { delete localRenames[p.trim()]; });
+			return head + body.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^"']+/g, function (part)
+			{
+				return /^["']/.test(part) ? part : renameIdentifiers(part, localRenames);
+			});
+		});
+	}).join('');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
