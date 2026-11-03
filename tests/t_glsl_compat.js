@@ -17,6 +17,11 @@ function port(helpers, body)
 	return { out: r.src, messages: messages };
 }
 const has = (r, text) => r.out.indexOf(text) >= 0;
+const asinhPort = port('', 'vec3 v=asinh(vec3(-1.,0.,1.));fragColor=vec4(v,1.);');
+check('asinh vector results keep their vector type', has(asinhPort, 'float4(v,1.)'), asinhPort.out);
+check('asinh compatibility provides scalar and vector overloads', [1,2,3,4].every(n => asinhPort.out.includes((n===1?'float':'float'+n)+' asinh(')));
+check('asinh helper is not added without a call', !porter.injectGlslHelpers('float f(){return 1.;}').includes('asinh'));
+check('custom asinh definitions are preserved', porter.injectGlslHelpers('float asinh(float x){return x;}')==='float asinh(float x){return x;}');
 function staticGlobals(src){const ctx={src};porter.stepStaticGlobals(ctx);return ctx.src;}
 function logicalXor(expr){const ctx={src:'bool f(bool a,bool b,bool c){return '+expr+';}',messages:[]};porter.stepLogicalXor(ctx);return ctx.src;}
 check('logical XOR has one lexer token',porter.tokenizeSource('a^^b').filter(t=>t.text==='^^').length===1);

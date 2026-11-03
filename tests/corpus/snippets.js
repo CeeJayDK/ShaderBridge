@@ -1,6 +1,7 @@
 // Small GLSL idioms common in Shadertoy shaders. Each entry: [id, helpers (global code), body of mainImage].
 // Every one is valid GLSL ES 3.00 as Shadertoy accepts it; the porter must turn it into a compiling effect.
 module.exports = [
+	['fn_asinh','','fragColor=asinh(vec4(fragCoord,-1.,1.))+vec4(asinh(fragCoord.x))+vec4(asinh(vec2(-2.,2.)),asinh(vec2(0.,1.)));'],
 	['scalar_constructor_from_vector','','vec2 p=fragCoord*.1;int column=int(p);float value=float(vec3(.25,.5,.75));bool flag=bool(vec2(0.,1.));fragColor=vec4(float(column),value,float(flag),1.);'],
 	['scalar_constructor_increment','','vec3 p=vec3(1.,2.,3.);int first=int(++p);fragColor=vec4(float(first),p.y,p.z,1.);'],
 	['conditional_loop_header_one','#define CHOICE 1\nfloat total(){float sum=0.;\n#if CHOICE\nfor(int i=0;i<3;i++){float value=1.,\n#else\nfor(int i=0;i<2;i++){float value=2.,\n#endif\nextra=0.;sum+=value+extra;}\nreturn sum;}\n','fragColor=vec4(total());'],

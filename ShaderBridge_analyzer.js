@@ -24,7 +24,7 @@ function anPromote(a, b)
 }
 
 // ── builtin function result types ───────────────────────────────────────────
-var AN_SAME_AS_ARG0 = 'abs sign floor ceil fract frac sin cos tan asin acos atan sinh cosh tanh exp exp2 log log2 sqrt inversesqrt rsqrt normalize saturate radians degrees trunc round ddx ddy dFdx dFdy fwidth ddx_fine ddy_fine ddx_coarse ddy_coarse min max clamp pow mod fmod atan2 reflect refract mix lerp step smoothstep rcp'.split(' ');
+var AN_SAME_AS_ARG0 = 'abs sign floor ceil fract frac sin cos tan asin acos atan sinh cosh tanh asinh exp exp2 log log2 sqrt inversesqrt rsqrt normalize saturate radians degrees trunc round ddx ddy dFdx dFdy fwidth ddx_fine ddy_fine ddx_coarse ddy_coarse min max clamp pow mod fmod atan2 reflect refract mix lerp step smoothstep rcp'.split(' ');
 var AN_SCALAR_FLOAT = 'dot length distance determinant'.split(' ');
 var AN_BOOL_RESULT = 'any all isnan isinf'.split(' ');
 var AN_FLOAT4_RESULT = 'tex2D tex2Dlod tex2Dgrad tex2Dbias tex2Dfetch tex2Dproj tex3D tex3Dlod tex3Dfetch tex3Dgrad texCUBE texCUBElod texture texture2D textureLod textureGrad texelFetch textureCube textureCubeLod'.split(' ');

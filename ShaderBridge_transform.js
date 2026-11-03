@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.5.0';
+var PORTER_VERSION = '3.5.1';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -3469,6 +3469,18 @@ function glslHelperSource(name, n)
 function injectGlslHelpers(src)
 {
 	var helpers = '';
+	if (/\basinh\s*\(/.test(src) && !/\bfloat[234]?\s+asinh\s*\([^)]*\)\s*\{/.test(src))
+	{
+		// Use the magnitude to avoid cancellation for negative inputs. The small
+		// and large branches avoid rounding away tiny values and squaring overflow.
+		helpers += 'float asinh(float x)\n{\n\tfloat a = abs(x);\n\tif (a < 0.0001)\n\t{\n\t\treturn x;\n\t}\n\tif (a > 1.0e19)\n\t{\n\t\treturn sign(x) * (log(a) + 0.6931471805599453);\n\t}\n\treturn sign(x) * log(a + sqrt(a * a + 1.0));\n}\n\n';
+		[2, 3, 4].forEach(function (n)
+		{
+			var type = 'float' + n;
+			var args = ['x', 'y', 'z', 'w'].slice(0, n).map(function (c) { return 'asinh(x.' + c + ')'; });
+			helpers += type + ' asinh(' + type + ' x)\n{\n\treturn ' + type + '(' + args.join(', ') + ');\n}\n\n';
+		});
+	}
 	// GLSL stores x in the low half and y in the high half. A helper evaluates
 	// the argument once, including when the caller supplies a stateful expression.
 	if (/\bunpackHalf2x16\s*\(/.test(src) && !/\bfloat2\s+unpackHalf2x16\s*\([^)]*\)\s*\{/.test(src))
