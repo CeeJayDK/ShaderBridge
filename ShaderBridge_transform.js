@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.5.5';
+var PORTER_VERSION = '3.5.6';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -592,10 +592,71 @@ function stepVoidParameters(ctx)
 	removals.sort(function (a, b) { return b.start - a.start; }).forEach(function (token) { ctx.src = ctx.src.slice(0, token.start) + ctx.src.slice(token.end); });
 }
 
+function lowerArrayReturnFunctions(ctx)
+{
+	// FX cannot return arrays directly. Carry the array in a struct and expose
+	// its field at call sites; calls and returned expressions still run once.
+	var tokens = tokenizeSource(ctx.src).filter(function (t) { return t.type !== 'ws' && t.type !== 'comment' && t.type !== 'placeholder' && t.type !== 'preproc'; });
+	var edits = [], wrappers = Object.create(null), signatures = Object.create(null), serial = 0;
+	function text(i) { return tokens[i] ? tokens[i].text : ''; }
+	function close(i)
+	{
+		var right = { '[': ']', '(': ')', '{': '}' }[text(i)], depth = 1;
+		for (var j = i + 1; j < tokens.length; j++)
+		{
+			if (text(j) === text(i)) { depth++; }
+			else if (text(j) === right && --depth === 0) { return j; }
+		}
+		return tokens.length;
+	}
+	function unique(prefix)
+	{
+		var name;
+		do { name = prefix + (++serial); } while (new RegExp('\\b' + name + '\\b').test(ctx.src));
+		return name;
+	}
+	for (var i = 0; i < tokens.length; i++)
+	{
+		if (!anParseType(text(i)) || text(i + 1) !== '[') { continue; }
+		var end = close(i + 1), name = text(end + 1), open = end + 2;
+		if (end === i + 2 || !tokens[end + 1] || tokens[end + 1].type !== 'ident' || text(open) !== '(') { continue; }
+		var paramsEnd = close(open), body = paramsEnd + 1;
+		if (text(body) !== '{' && text(body) !== ';') { continue; }
+		var dimensions = ctx.src.slice(tokens[i + 1].start, tokens[end].end);
+		var key = name + ':' + text(i) + ':' + dimensions, wrapper = signatures[key];
+		if (!wrapper)
+		{
+			wrapper = signatures[key] = unique('ST_ArrayReturn_');
+			wrappers[wrapper] = true;
+			edits.push({ start: tokens[i].start, end: tokens[i].start, text: 'struct ' + wrapper + '\n{\n\t' + text(i) + ' values' + dimensions + ';\n};\n' });
+		}
+		edits.push({ start: tokens[i].start, end: tokens[end].end, text: wrapper });
+		if (text(body) !== '{') { i = paramsEnd; continue; }
+		var bodyEnd = close(body), local = unique('ST_arrayResult_');
+		for (var r = body + 1; r < bodyEnd; r++)
+		{
+			if (text(r) !== 'return') { continue; }
+			var finish = r + 1;
+			for (; finish < bodyEnd && text(finish) !== ';'; finish++)
+			{
+				if (text(finish) === '(' || text(finish) === '[' || text(finish) === '{') { finish = close(finish); }
+			}
+			if (finish >= bodyEnd) { continue; }
+			var expression = ctx.src.slice(tokens[r].end, tokens[finish].start);
+			edits.push({ start: tokens[r].start, end: tokens[finish].end, text: '{\n\t' + wrapper + ' ' + local + ';\n\t' + local + '.values = ' + expression + ';\n\treturn ' + local + ';\n}' });
+			r = finish;
+		}
+		i = bodyEnd;
+	}
+	edits.sort(function (a, b) { return b.start - a.start || b.end - a.end; }).forEach(function (e) { ctx.src = ctx.src.slice(0, e.start) + e.text + ctx.src.slice(e.end); });
+	return wrappers;
+}
+
 function stepArrayDeclarators(ctx)
 {
 	// GLSL permits the array size on the type: float[3] a, b. FX requires
 	// the size on every variable instead: float a[3], b[3].
+	var arrayReturns = lowerArrayReturnFunctions(ctx);
 	var A = analyzeSource(ctx.src), tokens = A.sig.map(function (i) { return A.tokens[i]; }), edits = [], parameters = [];
 	function text(i) { return tokens[i] ? tokens[i].text : ''; }
 	function close(i)
@@ -633,6 +694,13 @@ function stepArrayDeclarators(ctx)
 		}
 	}
 	edits.sort(function (a, b) { return b.start - a.start; }).forEach(function (edit) { ctx.src = ctx.src.slice(0, edit.start) + edit.text + ctx.src.slice(edit.end); });
+	if (Object.keys(arrayReturns).length)
+	{
+		ctx.src = rewriteExpressions(ctx.src, function (node, render)
+		{
+			return node.kind === 'call' && arrayReturns[node.type] ? node.name + '(' + node.args.map(render).join(', ') + ').values' : null;
+		}).src;
+	}
 }
 
 function stepUnsignedFloatConstants(ctx)

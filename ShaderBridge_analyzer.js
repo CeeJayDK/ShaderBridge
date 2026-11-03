@@ -723,7 +723,12 @@ function anAddParser(an)
 					var rt = null;
 					var resolved = resolveType(name);
 					if (anParseType(resolved) || A.structs[resolved]) { rt = resolved; }
-					else if (A.functions[name]) { rt = A.functions[name][0].ret; }
+					else if (A.functions[name])
+					{
+						var overloads = A.functions[name];
+						var exact = overloads.filter(function (fn) { return fn.params.length === args.length && fn.params.every(function (param, i) { return param.type === args[i].type; }); });
+						rt = (exact[0] || overloads[0]).ret;
+					}
 					else if (A.macros[name] && A.macros[name].fn) { rt = macroCallType(name, argTypes); }
 					else { rt = anBuiltinType(name, argTypes); }
 					var call = { kind: 'call', name: name, from: p, to: q2, type: rt, args: args, open: p + 1 };

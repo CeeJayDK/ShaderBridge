@@ -49,6 +49,14 @@ check('ordinary array declarations remain intact',arrayDeclaration('float a[3];'
 check('comments around dimensions survive',arrayDeclaration('float /* a */ [3] /* b */ values;')==='float /* a */  /* b */ values[3];');
 check('quoted array text remains data',arrayDeclaration('#define LABEL "float[3] a"\nfloat[3] values;')==='#define LABEL "float[3] a"\nfloat values[3];');
 check('struct array element types are recognized',arrayDeclaration('struct Item{float x;};Item[2] a;')==='struct Item{float x;};Item a[2];');
+const arrayReturnSource='float[2] make(float x);\nfloat[2] make(float x){float a[2];a[0]=x;a[1]=x+1.;if(x>0.)return a;return a;}\nfloat make(float2 x){return x.x;}\nvoid f(){float a[2]=make(1.);float b=make(float2(2.,3.));}';
+const arrayReturnOut=arrayDeclaration(arrayReturnSource);
+check('array return prototypes and definitions share one wrapper', (arrayReturnOut.match(/struct ST_ArrayReturn_/g)||[]).length===1);
+check('array-return calls expose the carried array', arrayReturnOut.includes('make(1.).values'));
+check('scalar-return overload calls remain scalar', arrayReturnOut.includes('float b=make(float2(2., 3.));')||arrayReturnOut.includes('float b=make(float2(2.,3.));'),arrayReturnOut);
+check('each early array return is wrapped', (arrayReturnOut.match(/\.values =/g)||[]).length===2);
+check('array return lowering is idempotent', arrayDeclaration(arrayReturnOut)===arrayReturnOut);
+check('generated wrapper names avoid existing identifiers',!arrayDeclaration('float ST_ArrayReturn_1;float[2] make(){float a[2];return a;}').includes('struct ST_ArrayReturn_1\n'));
 
 const voidList=port('float value(void){return .5;}\n','fragColor=vec4(value());');
 check('lone void parameter lists are made empty',has(voidList,'float value()')&&!has(voidList,'value(void)'),voidList.out);
