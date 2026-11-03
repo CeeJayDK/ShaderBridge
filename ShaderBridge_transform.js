@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.5.1';
+var PORTER_VERSION = '3.5.2';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -1330,26 +1330,32 @@ function stepVectorComponentWrites(ctx)
 	var operations = { '=': 'set', '+=': 'add', '-=': 'sub', '*=': 'mul', '/=': 'div' };
 	var result = rewriteExpressions(ctx.src, function (node, render)
 	{
-		if (node.kind !== 'assign' || !operations[node.op]) { return null; }
-		var target = node.left;
-		if (target.kind !== 'index' || target.index.kind === 'num' || !/^float[234]$/.test(target.base.type || '')) { return null; }
+		var increment = (node.kind === 'postinc' || node.kind === 'unary') && /^(\+\+|--)$/.test(node.op);
+		if (!increment && (node.kind !== 'assign' || !operations[node.op])) { return null; }
+		var target = increment ? node.child : node.left;
+		if (target.kind !== 'index' || target.index.kind === 'num' || !/^(?:float|int|uint)[234]$/.test(target.base.type || '')) { return null; }
 		// Matrix rows cannot be passed by reference with a dynamic row index.
 		if (target.base.kind === 'index' && /^float[234]x[234]$/.test(target.base.base.type || '')) { return null; }
 		var type = target.base.type;
-		var name = 'ST_component_' + operations[node.op] + '_' + type;
-		helpers[name] = { type: type, op: node.op };
-		return name + '(' + render(target.base) + ', ' + render(target.index) + ', ' + render(node.right) + ')';
+		var operation = increment ? (node.kind === 'postinc' ? 'post' : 'pre') + (node.op === '++' ? 'inc' : 'dec') : operations[node.op];
+		var name = 'ST_component_' + operation + '_' + type;
+		helpers[name] = { type: type, op: node.op, increment: increment, postfix: node.kind === 'postinc' };
+		return name + '(' + render(target.base) + ', ' + render(target.index) + (increment ? '' : ', ' + render(node.right)) + ')';
 	});
 	var declarations = Object.keys(helpers).map(function (name)
 	{
 		var helper = helpers[name];
+		var scalar = helper.type.replace(/[234]$/, '');
 		var body = '';
 		for (var i = 0; i < +helper.type.slice(-1); i++)
 		{
 			var field = 'value.' + 'xyzw'[i];
-			body += '\tif (component == ' + i + ') { ' + field + ' ' + helper.op + ' amount; return ' + field + '; }\n';
+			var action = helper.increment
+				? 'return ' + (helper.postfix ? field + helper.op : helper.op + field) + ';'
+				: field + ' ' + helper.op + ' amount; return ' + field + ';';
+			body += '\tif (component == ' + i + ') { ' + action + ' }\n';
 		}
-		return 'float ' + name + '(inout ' + helper.type + ' value, int component, float amount)\n{\n' + body + '\treturn 0.;\n}\n';
+		return scalar + ' ' + name + '(inout ' + helper.type + ' value, int component' + (helper.increment ? '' : ', ' + scalar + ' amount') + ')\n{\n' + body + '\treturn ' + (scalar === 'float' ? '0.' : '0') + ';\n}\n';
 	}).join('\n');
 	ctx.src = declarations ? declarations + '\n' + result.src : result.src;
 }

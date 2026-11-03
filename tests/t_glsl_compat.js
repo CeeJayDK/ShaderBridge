@@ -114,7 +114,12 @@ check('constant component writes stay direct', !has(r, 'ST_component_'), r.out);
 r = port('', 'mat4 value=mat4(1.);value[0][int(fragCoord.x)&3]=1.;fragColor=value[0];');
 check('matrix row writes stay separate from addressable vectors', !has(r, 'ST_component_'), r.out);
 r = port('', 'ivec4 values[2];values[0][int(fragCoord.x)&3]=1;fragColor=vec4(values[0]);');
-check('integer array components are left unchanged', !has(r, 'ST_component_'), r.out);
+check('integer array components use typed write helpers', has(r, 'int ST_component_set_int4(inout int4 value, int component, int amount)'), r.out);
+['++', '--'].forEach(op => ['prefix','postfix'].forEach(position => {
+	const expression=position==='prefix'?op+'v[j++]':'v[j++]'+op;
+	const result=port('', 'ivec2 v=ivec2(2,3);int j=0;int n='+expression+';fragColor=vec4(float(n));');
+	check('integer component '+position+' '+op+' keeps one index evaluation', has(result,'ST_component_'+(position==='prefix'?'pre':'post')+(op==='++'?'inc':'dec')+'_int2(v, j++)') && has(result,'return '+(position==='prefix'?op+'value.x':'value.x'+op)+';'),result.out);
+}));
 r = port('', 'vec4 value=vec4(0.);value[int(fragCoord.x)&3]=2.;fragColor=value;');
 check('standalone vector components use the write helper', has(r,'ST_component_set_float4(value,'),r.out);
 r = port('struct Item{vec3 value;};\n', 'Item item;item.value[int(fragCoord.x)%3]+=2.;fragColor=vec4(item.value,1.);');

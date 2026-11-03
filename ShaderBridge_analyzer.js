@@ -770,7 +770,7 @@ function anAddParser(an)
 				}
 				else if (s === '++' || s === '--')
 				{
-					r = { node: { kind: 'postinc', from: r.node.from, to: r.next, type: r.node.type, child: r.node }, next: r.next + 1 };
+					r = { node: { kind: 'postinc', op: s, from: r.node.from, to: r.next, type: r.node.type, child: r.node }, next: r.next + 1 };
 				}
 				else { break; }
 			}
