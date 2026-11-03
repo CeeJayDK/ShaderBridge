@@ -102,8 +102,8 @@ check('a pass that never uses gl_FragCoord has no assignment', !/ST_FragCoord/.t
 // Connected channel clocks use iTime, while the channel values are emitted per pass.
 const ub = (names) => porter.buildUniformBlock(new Set(names));
 let block = ub(['iChannelTime']);
-check('iChannelTime alone also declares the timer behind iTime', /uniform float iTimeMS < source = "timer"; >;/.test(block) && /#define iTime \(iTimeMS \* 0\.001\)/.test(block), block);
-check('channel clocks are deferred until pass channel mappings are known', block.indexOf('#define iTime ') >= 0 && block.indexOf('#define iChannelTime') < 0, block);
+check('iChannelTime alone also declares the timer behind iTime', /uniform float iTimeMS < source = "timer"; >;/.test(block) && /static float iTime = 0\.0;/.test(block), block);
+check('channel clocks are deferred until pass channel mappings are known', block.indexOf('static float iTime ') >= 0 && block.indexOf('#define iChannelTime') < 0, block);
 block = ub(['iChannelTime', 'iTime']);
 check('with both, iTime is declared once', (block.match(/uniform float iTimeMS/g) || []).length === 1);
 check('with neither there is no timer and no stub', ub(['iResolution']).indexOf('iTimeMS') < 0 && ub(['iResolution']).indexOf('iChannelTime') < 0);

@@ -59,7 +59,8 @@ function buildUniformBlock(usedUniforms) {
 		sep();
 		lines.push('// iTime — elapsed time in seconds');
 		lines.push('uniform float iTimeMS < source = "timer"; >;');
-		lines.push('#define iTime (iTimeMS * 0.001)');
+		// A variable permits GLSL parameter/local shadowing, including macro aliases.
+		lines.push('static float iTime = 0.0;');
 	}
 	if (usedUniforms.has('iTimeDelta')) {
 		sep();
@@ -992,12 +993,14 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 		// back into itself, reads back at the same coordinates it was written to.
 		if (p.id === 'volumeA') {
 			lines.push('void CS_ShadertoyVolumeA(uint3 id : SV_DispatchThreadID)', '{', '\tif (any(id >= uint3(ST_VOLUME_SIZE, ST_VOLUME_SIZE, ST_VOLUME_SIZE))) return;', '\tST_VolumeCoord = float3(id) + 0.5;', '\tfloat4 value = float4(0.0, 0.0, 0.0, 0.0);');
+			if (usedUniforms.has('iTime') || usedUniforms.has('iChannelTime')) { lines.push('\tiTime = iTimeMS * 0.001;'); }
 			if (initName) { lines.push('\t' + initName + '();'); }
 			lines.push('\t' + mainImgName + '(ST_VolumeCoord.xy, value);', '\ttex3Dstore(ST_VolumeOutput, int3(id), value);', '}');
 		}
 		else if (!isBuf) {
 			lines.push('void ' + psName + '(float4 vpos : SV_Position, float2 texcoord : TEXCOORD, out float4 output : SV_Target)');
 			lines.push('{');
+			if (usedUniforms.has('iTime') || usedUniforms.has('iChannelTime')) { lines.push('\tiTime = iTimeMS * 0.001;'); }
 			lines.push('\tfloat2 ' + coordVar + ' = float2(vpos.x, ST_FLIP_Y ? BUFFER_HEIGHT - vpos.y : vpos.y);');
 			if (/\bST_FragCoord\b/.test(p.src)) { lines.push('\tST_FragCoord = float4(' + coordVar + ', 0.0, 1.0);'); }
 			if (initName) { lines.push('\t' + initName + '();'); }
@@ -1007,6 +1010,7 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 		else {
 			lines.push('void ' + psName + '(float4 vpos : SV_Position, float2 texcoord : TEXCOORD, out float4 output : SV_Target)');
 			lines.push('{');
+			if (usedUniforms.has('iTime') || usedUniforms.has('iChannelTime')) { lines.push('\tiTime = iTimeMS * 0.001;'); }
 			if (/\bST_FragCoord\b/.test(p.src)) { lines.push('\tST_FragCoord = float4(vpos.xy, 0.0, 1.0);'); }
 			if (initName) { lines.push('\t' + initName + '();'); }
 			lines.push('\t' + mainImgName + '(vpos.xy, output);');
