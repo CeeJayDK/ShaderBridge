@@ -79,5 +79,16 @@ check('through the pipeline: grade is defined before mainImage', out.indexOf('fl
 check('through the pipeline: no declaration left', !/float3 grade\([^)]*\)\s*;/.test(out), out);
 check('through the pipeline: the move is reported', m3.some(m => /forward declarations/.test(m.text)));
 
+const internal='float later(float x);\nfloat caller(float x){\n#if MODE\nreturn later(x);\n#endif\nreturn 0.;}\nfloat later(float x){return x;}';
+check('internal conditionals do not prevent moving a caller',order(run(internal),['float later','float caller']),run(internal));
+const conditionalCallee='float pick(float x);\nfloat caller(float x){return pick(x);}\n#if MODE\nfloat pick(float x){return x;}\n#else\nfloat pick(float x){return x+1.;}\n#endif\n';
+const movedConditional=run(conditionalCallee);
+check('an unconditional caller moves after the complete conditional group',movedConditional.indexOf('float caller(')>movedConditional.indexOf('#endif'),movedConditional);
+check('conditional callee alternatives remain inside their branches',movedConditional.indexOf('#if MODE')<movedConditional.indexOf('float pick(')&&movedConditional.lastIndexOf('float pick(')<movedConditional.indexOf('#endif'),movedConditional);
+const guarded=porter.guardConditionalReturnFallbacks('int f(){\n#if MODE\nreturn 3;\n#elif SECOND\nreturn 5;\n#endif\nreturn 7;\n}');
+check('conditional return fallbacks become an else branch',guarded.includes('#else\nreturn 7;')&&guarded.includes('#elif SECOND')&&guarded.lastIndexOf('#endif')>guarded.indexOf('return 7;'),guarded);
+check('conditional return guards are idempotent',porter.guardConditionalReturnFallbacks(guarded)===guarded);
+const runtimeReturn='int f(bool b){\n#if MODE\nif(b)return 3;\n#endif\nreturn 7;\n}';
+check('runtime-conditional returns do not swallow their fallback',porter.guardConditionalReturnFallbacks(runtimeReturn)===runtimeReturn);
 console.log((total - bad) + '/' + total + ' function-order tests OK');
 process.exit(bad ? 1 : 0);

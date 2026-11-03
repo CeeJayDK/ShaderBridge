@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.5.7';
+var PORTER_VERSION = '3.5.8';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -454,7 +454,9 @@ function stepConditionalLoopBodies(ctx)
 					while (body[first] && body[first].text !== ']') { first++; }
 					first++;
 				}
-				if (!body[first] || !/^(for|while)$/.test(body[first].text)) { return false; }
+				var loopHeader = body[first] && /^(for|while)$/.test(body[first].text);
+				var functionHeader = body[first] && body[first + 1] && body[first + 2] && body[first].type === 'ident' && body[first + 1].type === 'ident' && body[first + 2].text === '(';
+				if (!loopHeader && !functionHeader) { return false; }
 				var braces = 0, parens = 0, brackets = 0, minimum = 0;
 				body.forEach(function (t)
 				{
@@ -489,7 +491,7 @@ function stepConditionalLoopBodies(ctx)
 		ctx.src = ctx.src.slice(0, edit.from) + edit.text + ctx.src.slice(edit.to);
 		changed++;
 	}
-	if (changed) { ctx.messages.push({ level: 'info', text: 'Completed shared bodies in ' + changed + ' conditional loop-header group(s); all alternatives remain selectable.' }); }
+	if (changed) { ctx.messages.push({ level: 'info', text: 'Completed shared bodies in ' + changed + ' conditional loop/function-header group(s); all alternatives remain selectable.' }); }
 }
 
 function stepGlFragCoord(ctx)
@@ -1127,8 +1129,52 @@ function stepVolumeLookups(ctx)
 	}).src.slice(prefix.length);
 }
 
+function guardConditionalReturnFallbacks(src)
+{
+	// A preprocessor-selected return makes a following fallback unreachable in FX.
+	// Keep that fallback as the missing #else, preserving every selectable branch.
+	var A = analyzeSource(src), edits = [];
+	Object.keys(A.functions).forEach(function (name)
+	{
+		A.functions[name].forEach(function (fn)
+		{
+			if (fn.bodyFrom === undefined) { return; }
+			var first = A.tokens[A.sig[fn.bodyFrom]], last = A.tokens[A.sig[fn.bodyTo]];
+			var tokens = A.tokens.filter(function (t) { return t.start > first.start && t.end <= last.end && t.type !== 'ws' && t.type !== 'comment' && t.type !== 'placeholder'; });
+			var braceDepth = 1;
+			function simpleReturn(branch) { return branch.length >= 2 && branch[0].text === 'return' && branch[branch.length - 1].text === ';' && branch.filter(function (t) { return t.text === ';'; }).length === 1; }
+			for (var i = 0; i < tokens.length; i++)
+			{
+				if (tokens[i].text === '{') { braceDepth++; }
+				else if (tokens[i].text === '}') { braceDepth--; }
+				if (braceDepth !== 1 || tokens[i].type !== 'preproc' || !/^#\s*(if|ifdef|ifndef)\b/.test(tokens[i].text)) { continue; }
+				var branches = [], branch = [], j = i + 1, valid = true;
+				for (; j < tokens.length; j++)
+				{
+					if (tokens[j].type !== 'preproc') { branch.push(tokens[j]); continue; }
+					if (/^#\s*(elif|endif)\b/.test(tokens[j].text))
+					{
+						branches.push(branch); branch = [];
+						if (/^#\s*endif\b/.test(tokens[j].text)) { break; }
+					}
+					else { valid = false; break; }
+				}
+				if (!valid || j >= tokens.length || !branches.every(simpleReturn)) { continue; }
+				var tail = tokens.slice(j + 1, -1);
+				if (tokens[tokens.length - 1].start !== last.start || tail.some(function (t) { return t.type === 'preproc' || t.text === '{' || t.text === '}'; }) || !simpleReturn(tail)) { continue; }
+				edits.push({ start: tokens[j].start, end: tokens[j].end, text: tokens[j].text.replace(/^#\s*endif\b/, '#else') });
+				edits.push({ start: last.start, end: last.start, text: '\n#endif\n' });
+				break;
+			}
+		});
+	});
+	edits.sort(function (a, b) { return b.start - a.start; }).forEach(function (e) { src = src.slice(0, e.start) + e.text + src.slice(e.end); });
+	return src;
+}
+
 function stepConditionalStatements(ctx)
 {
+	ctx.src = guardConditionalReturnFallbacks(ctx.src);
 	// ReShade evaluates both ternary arms. Statement-level GLSL conditionals
 	// need real branches to keep assignments, increments and calls conditional.
 	var A = analyzeSource(ctx.src), edits = [], seen = {};
@@ -3715,7 +3761,7 @@ function reorderFunctions(src, messages)
 		if (/^#\s*(if|ifdef|ifndef)\b/.test(t.text)) { if (depth === 0) { blockStart = t.start; } depth++; }
 		else if (/^#\s*endif\b/.test(t.text)) { depth--; if (depth === 0) { blocks.push({ start: blockStart, end: t.end }); } }
 	});
-	function inConditional(item) { return blocks.some(function (b) { return item.start < b.end && item.end > b.start; }); }
+	function inConditional(item) { return blocks.some(function (b) { return item.start >= b.start && item.start < b.end; }); }
 
 	// which functions each definition calls
 	var defined = {};
@@ -3736,6 +3782,14 @@ function reorderFunctions(src, messages)
 	var kept = prototypes.filter(function (p) { return !defined[p.name]; });
 	var cuts = removed.map(function (p) { return { start: p.start, end: p.end }; });
 	definitions.sort(function (a, b) { return a.start - b.start; });
+	// A caller outside a conditional must follow the whole conditional group,
+	// rather than being inserted beside a callee inside one selected branch.
+	var anchors = blocks.filter(function (b)
+	{
+		return definitions.some(function (d) { return d.start >= b.start && d.start < b.end; })
+			&& !definitions.some(function (d) { return b.end > d.start && b.end < d.end; });
+	}).map(function (b) { return { start: b.end, end: b.end, name: '', block: b }; });
+	var units = definitions.concat(anchors).sort(function (a, b) { return a.start - b.start; });
 	var gaps = [];
 	var cursor = 0;
 	function gapText(from, to)
@@ -3751,10 +3805,10 @@ function reorderFunctions(src, messages)
 		});
 		return text + src.slice(at, to);
 	}
-	definitions.forEach(function (d) { gaps.push(gapText(cursor, d.start)); cursor = d.end; d.text = src.slice(d.start, d.end); });
+	units.forEach(function (d) { gaps.push(gapText(cursor, d.start)); cursor = d.end; d.text = src.slice(d.start, d.end); });
 	gaps.push(gapText(cursor, src.length));
-	var slots = definitions.map(function (d) { return [d]; });
-	definitions.forEach(function (d, i) { d.slot = i; d.movable = !inConditional(d); });
+	var slots = units.map(function (d) { return [d]; });
+	units.forEach(function (d, i) { d.slot = i; d.movable = !inConditional(d); });
 
 	function position(d) { return d.slot * 100000 + slots[d.slot].indexOf(d); }
 	var moved = {};
@@ -3768,7 +3822,13 @@ function reorderFunctions(src, messages)
 			var target = null;
 			f.callees.forEach(function (name)
 			{
-				definitions.forEach(function (x) { if (x.name === name && position(x) > position(f) && (!target || position(x) > position(target))) { target = x; } });
+				definitions.forEach(function (x)
+				{
+					if (x.name !== name) { return; }
+					var destination = x;
+					anchors.forEach(function (a) { if (x.start >= a.block.start && x.start < a.block.end && position(a) > position(destination)) { destination = a; } });
+					if (position(destination) > position(f) && (!target || position(destination) > position(target))) { target = destination; }
+				});
 			});
 			if (!target) { continue; }
 			if (!f.movable) { blocked[f.name] = true; continue; }
