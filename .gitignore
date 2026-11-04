@@ -1,0 +1,4 @@
+# Local third-party texture assets and generated archives.
+/Textures/**
+/dist/
+__pycache__/

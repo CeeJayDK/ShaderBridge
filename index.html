@@ -95,7 +95,7 @@ textarea { background: #0d0f14; border: none; color: #c8d0e0; font-family: monos
 			<div class="indicator unlit" id="ind-matrix" data-tip="Matrix math detected. GLSL is column-major (M×v), HLSL is row-major (v×M). Review all matrix multiplications and mul() calls in the output manually.">
 				<span class="ind-icon">▦</span><span>Matrix Math</span>
 			</div>
-			<div class="indicator unlit" id="ind-textures" data-tip="Custom texture input detected. You must supply the texture file(s) alongside the .fx file in your ReShade Shaders folder.">
+			<div class="indicator unlit" id="ind-textures" data-tip="External texture input detected. Install the matching files in a ReShade texture search path, usually reshade-shaders/Textures. Custom assets must be supplied separately.">
 				<span class="ind-icon">▣</span><span>Custom Textures</span>
 			</div>
 			<div class="indicator unlit" id="ind-audio" data-tip="Audio input detected (iSampleRate / mainSound). ReShade does not support audio input — this shader cannot be fully ported.">
@@ -125,6 +125,7 @@ textarea { background: #0d0f14; border: none; color: #c8d0e0; font-family: monos
 		<div class="pane-actions">
 			<button onclick="copyOutput()" class="success-btn" id="copy-btn" data-tip="Copy the converted ReShade FX source to the clipboard.">Copy</button>
 			<button onclick="downloadFx()"  class="primary" data-tip="Download the converted shader as a .fx file. Place it in your ReShade Shaders folder.">Download .fx</button>
+			<a href="https://github.com/CeeJayDK/ShaderBridge#texture-assets" target="_blank" rel="noopener" data-tip="Texture files are installed separately from the converted .fx. Read the setup instructions.">Texture setup</a>
 		</div>
 	</div>
 
