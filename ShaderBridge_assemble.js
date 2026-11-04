@@ -77,7 +77,7 @@ function buildUniformBlock(usedUniforms) {
 	if (usedUniforms.has('iFrame')) {
 		sep();
 		lines.push('// iFrame starts at zero when this effect first renders, after shader compilation.');
-		lines.push('#define iFrame int(tex2Dfetch(ST_FrameSampler, int2(0, 0)).x)');
+		lines.push('static int iFrame = 0;');
 	}
 	if (usedUniforms.has('iDate')) {
 		sep();
@@ -999,6 +999,7 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 		if (p.id === 'volumeA') {
 			lines.push('void CS_ShadertoyVolumeA(uint3 id : SV_DispatchThreadID)', '{', '\tif (any(id >= uint3(ST_VOLUME_SIZE, ST_VOLUME_SIZE, ST_VOLUME_SIZE))) return;', '\tST_VolumeCoord = float3(id) + 0.5;', '\tfloat4 value = float4(0.0, 0.0, 0.0, 0.0);');
 			if (usedUniforms.has('iTime') || usedUniforms.has('iChannelTime')) { lines.push('\tiTime = iTimeMS * 0.001;'); }
+			if (usedUniforms.has('iFrame')) { lines.push('\tiFrame = int(tex2Dfetch(ST_FrameSampler, int2(0, 0)).x);'); }
 			if (initName) { lines.push('\t' + initName + '();'); }
 			lines.push('\t' + mainImgName + '(ST_VolumeCoord.xy, value);', '\ttex3Dstore(ST_VolumeOutput, int3(id), value);', '}');
 		}
@@ -1006,6 +1007,7 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 			lines.push('void ' + psName + '(float4 vpos : SV_Position, float2 texcoord : TEXCOORD, out float4 output : SV_Target)');
 			lines.push('{');
 			if (usedUniforms.has('iTime') || usedUniforms.has('iChannelTime')) { lines.push('\tiTime = iTimeMS * 0.001;'); }
+			if (usedUniforms.has('iFrame')) { lines.push('\tiFrame = int(tex2Dfetch(ST_FrameSampler, int2(0, 0)).x);'); }
 			lines.push('\tfloat2 ' + coordVar + ' = float2(vpos.x, ST_FLIP_Y ? BUFFER_HEIGHT - vpos.y : vpos.y);');
 			if (/\bST_FragCoord\b/.test(p.src)) { lines.push('\tST_FragCoord = float4(' + coordVar + ', 0.0, 1.0);'); }
 			if (initName) { lines.push('\t' + initName + '();'); }
@@ -1016,6 +1018,7 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 			lines.push('void ' + psName + '(float4 vpos : SV_Position, float2 texcoord : TEXCOORD, out float4 output : SV_Target)');
 			lines.push('{');
 			if (usedUniforms.has('iTime') || usedUniforms.has('iChannelTime')) { lines.push('\tiTime = iTimeMS * 0.001;'); }
+			if (usedUniforms.has('iFrame')) { lines.push('\tiFrame = int(tex2Dfetch(ST_FrameSampler, int2(0, 0)).x);'); }
 			if (/\bST_FragCoord\b/.test(p.src)) { lines.push('\tST_FragCoord = float4(vpos.xy, 0.0, 1.0);'); }
 			if (initName) { lines.push('\t' + initName + '();'); }
 			lines.push('\t' + mainImgName + '(vpos.xy, output);');

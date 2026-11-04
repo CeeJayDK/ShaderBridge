@@ -9,7 +9,7 @@ function assemble(usesFrame)
 	return porter.assembleFxFile([{id:'image',src:r.src,coordVar:r.coordVar,mainImageName:r.mainImageName,globalInits:r.globalInits,usedUniforms:used,channels:[],channelNames:[],filters:[],wraps:[],vflips:[],format:'RGBA32F',selfRefChannels:[]}], true, [], null);
 }
 const fx = assemble(true);
-check('iFrame reads effect state rather than application uptime', /#define iFrame int\(tex2Dfetch\(ST_FrameSampler/.test(fx) && !/source = "framecount"/.test(fx));
+check('iFrame reads effect state rather than application uptime', /static int iFrame = 0;/.test(fx) && /iFrame = int\(tex2Dfetch\(ST_FrameSampler/.test(fx) && !/source = "framecount"/.test(fx));
 check('new effect state produces frame zero', /previous.w > 0.5 \? previous.x \+ 1.0 : 0.0/.test(fx));
 check('the counter reads and writes distinct textures', /Texture = ST_FramePrevious/.test(fx) && /RenderTarget = ST_FrameState/.test(fx));
 check('frame copy and update precede all shader passes', fx.indexOf('pass ST_CopyFrame') < fx.indexOf('pass ST_UpdateFrame') && fx.indexOf('pass ST_UpdateFrame') < fx.indexOf('pass Main'));
