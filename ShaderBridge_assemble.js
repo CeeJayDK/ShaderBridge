@@ -405,6 +405,29 @@ function buildChannelResolution(channelConfig, channelNames, bufTexNames, usedCh
 // ASSEMBLE FINAL .fx FILE
 // ═════════════════════════════════════════════════════════════════════════════
 
+// ReShade FX keywords and reserved words, which cannot name a technique (from effect_lexer.cpp)
+var RESHADE_FX_KEYWORDS = (function ()
+{
+	var map = {};
+	('_Pragma asm asm_fragment auto break case cast catch centroid char class column_major compile const const_cast continue default '
+		+ 'delete discard do double dynamic_cast else enum explicit extern external false FALSE for foreach friend globallycoherent goto '
+		+ 'groupshared if in inline inout interface linear long matrix mutable namespace new noinline nointerpolation noperspective '
+		+ 'operator out packed packoffset pass precise private protected public register reinterpret_cast restrict return row_major '
+		+ 'sample sampler sampler1D sampler1DArray sampler2D sampler2DArray sampler2DMS sampler2DMSArray sampler3D sampler_state samplerCube '
+		+ 'samplerCubeArray samplerCUBE samplerRect samplerRECT SamplerState storage storage1D storage2D storage3D shared short signed sizeof '
+		+ 'snorm static static_cast string struct switch technique template texture Texture1D texture1D Texture1DArray Texture2D texture2D '
+		+ 'Texture2DArray Texture2DMS Texture2DMSArray Texture3D texture3D textureCUBE TextureCube TextureCubeArray textureRECT this true '
+		+ 'TRUE try typedef uniform union unorm unsigned using vector virtual void volatile while').split(' ').forEach(function (w) { map[w] = true; });
+	return map;
+}());
+
+function isReShadeKeyword(name)
+{
+	return Object.prototype.hasOwnProperty.call(RESHADE_FX_KEYWORDS, name)
+		|| /^(?:bool|int|uint|float|half|dword)(?:[1-4](?:x[1-4])?)?$/.test(name)
+		|| /^min16(?:float|int|uint)(?:[2-4](?:x[2-4])?)?$/.test(name);
+}
+
 // transformedPasses: array of { id, src, coordVar, usedUniforms, channels[4], format }
 // shaderInfo (optional): { id, name, username, description, url }
 function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
@@ -442,6 +465,8 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 			.replace(/^_+|_+$/g, '')
 			.replace(/^(\d)/, '_$1');
 		if (safeName.length > 0) { techniqueName = safeName; }
+		// a technique name is an identifier, so a shader called "inout" or "float3" needs a suffix
+		if (isReShadeKeyword(techniqueName)) { techniqueName += '_'; }
 	}
 
 	// ── Header ──

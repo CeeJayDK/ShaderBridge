@@ -1238,7 +1238,8 @@ function downloadText(content, filename)
 	a.href     = URL.createObjectURL(blob);
 	a.download = filename;
 	a.click();
-	URL.revokeObjectURL(a.href);
+	// revoking at once can cancel the download in some browsers, so wait until it has started
+	setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

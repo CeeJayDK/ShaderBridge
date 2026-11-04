@@ -27,6 +27,10 @@ check('original shader and author precede the porter credit', credited.indexOf('
 check('porter credit has no vendor suffix', credited.includes('Created by CeeJay.dk & Claude Sonnet') && !credited.includes('(Anthropic)'));
 const escaped = porter.assembleFxFile([pass('image', null)], true, [], {name:'Example */ title',username:'Artist */ name',url:'https://example.test/*/',description:'A description with */ inside.'});
 check('metadata cannot close the generated header comment early', count(escaped.slice(0, escaped.indexOf('// ── Intrinsic remaps')), /\*\//g) === 1);
+const keywordName = porter.assembleFxFile([pass('image', null)], true, [], {name:'inout',username:'u',description:''});
+check('a shader named after a keyword gets a technique name that is an identifier', /technique inout_\b/.test(keywordName));
+check('a shader named after a vector type too', /technique float3_\b/.test(porter.assembleFxFile([pass('image', null)], true, [], {name:'float3',username:'u',description:''})));
+check('an ordinary name is unchanged', /technique Example_shader\b/.test(credited));
 const deltaBlock = porter.buildUniformBlock(new Set(['iTimeDelta']));
 check('frame duration is converted from ReShade milliseconds to Shadertoy seconds', /uniform float iTimeDeltaMS < source = "frametime"; >;/.test(deltaBlock) && /#define iTimeDelta \(iTimeDeltaMS \* 0\.001\)/.test(deltaBlock));
 

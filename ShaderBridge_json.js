@@ -19,6 +19,22 @@ var SHADERTOY_BUFFER_SLOT =
 	'03': 'bufD'
 };
 
+// Shadertoy's fixed output IDs of Buffer A to D, in the string and the older numeric form
+var SHADERTOY_BUFFER_OUTPUT_ID =
+{
+	'4dXGR8': 'bufA', 'XsXGR8': 'bufB', '4sXGR8': 'bufC', 'XdfGR8': 'bufD',
+	'257': 'bufA', '258': 'bufB', '259': 'bufC', '260': 'bufD'
+};
+
+// The slot of a buffer pass: by name ("Buffer A", or "Buf A" in older exports), else by output ID
+function shadertoyBufferSlot(rp)
+{
+	var m = /^buf(?:fer)?([a-d])$/.exec((rp.name || '').toLowerCase().replace(/\s/g, ''));
+	if (m) { return 'buf' + m[1].toUpperCase(); }
+	var outputs = rp.outputs || [];
+	return outputs.length ? (SHADERTOY_BUFFER_OUTPUT_ID[String(outputs[0].id)] || null) : null;
+}
+
 // Maps Shadertoy's SHA256 resource hashes to CH_TEXTURES names.
 // Hash is the filename portion of the filepath, without extension.
 // Source: https://shadertoyunofficial.wordpress.com/2019/07/23/shadertoy-media-files/
@@ -81,7 +97,7 @@ function resolveJsonInput(inp, outputIdMap, thisPassId)
 	var sampler = inp.sampler || {};
 	var filter  = sampler.filter || 'linear';
 	var wrap    = sampler.wrap   || 'clamp';
-	var vflip   = sampler.vflip  === 'true';
+	var vflip   = sampler.vflip  === 'true' || sampler.vflip === true;
 
 	// Clamp filter → linear in our model (clamp is a wrap mode on Shadertoy, not filter)
 	if (filter !== 'linear' && filter !== 'nearest' && filter !== 'mipmap') { filter = 'linear'; }
@@ -211,11 +227,8 @@ function populateFromJson(data)
 		// For buffer passes, derive slot from the filepath of any output or from pass name
 		// Most reliable: the filepath on the output entry itself (not available) —
 		// so we use the name field ("Buffer A" → bufA, etc.)
-		var name = (rp.name || '').toLowerCase().replace(/\s/g, '');
-		if      (name === 'buffera') { outputIdMap[outId] = 'bufA'; }
-		else if (name === 'bufferb') { outputIdMap[outId] = 'bufB'; }
-		else if (name === 'bufferc') { outputIdMap[outId] = 'bufC'; }
-		else if (name === 'bufferd') { outputIdMap[outId] = 'bufD'; }
+		var slot = shadertoyBufferSlot(rp);
+		if (slot) { outputIdMap[outId] = slot; }
 		else
 		{
 			// Fallback: try to extract from filepath pattern on inputs of other passes
@@ -269,13 +282,9 @@ function populateFromJson(data)
 		bufferPasses.forEach(function (rp)
 		{
 			var t    = (rp.type || '').toLowerCase();
-			var name = (rp.name || '').toLowerCase().replace(/\s/g, '');
 			if (slot === 'cubemapA' && t === 'cubemap')   { found = rp; }
 			else if (slot === 'volumeA' && t === 'volume') { found = rp; }
-			else if (slot === 'bufA' && name === 'buffera') { found = rp; }
-			else if (slot === 'bufB' && name === 'bufferb') { found = rp; }
-			else if (slot === 'bufC' && name === 'bufferc') { found = rp; }
-			else if (slot === 'bufD' && name === 'bufferd') { found = rp; }
+			else if (t === 'buffer' && shadertoyBufferSlot(rp) === slot) { found = rp; }
 		});
 		return { slot: slot, rp: found };
 	}).filter(function (e) { return e.rp !== null; });

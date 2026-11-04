@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.5.11';
+var PORTER_VERSION = '3.5.12';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -1495,18 +1495,45 @@ function stepHoistGlobalInits(ctx)
 	// the assignment moves to the pass entry point where it runs before mainImage, in the order the
 	// declarations had. A global that is hoisted is no longer a constant, so an initialiser that uses
 	// one is hoisted as well, and so on down the file.
+	//
+	// Struct values (S s = S_ctor(...)) and one-dimensional arrays ({a, f(b)}) are hoisted the same
+	// way; an array is assigned element by element, since HLSL has no array assignment from a list.
 	var globalInits = [];
 	var hoisted = [];
 	var globals = fileScopeTokenOffsets(s);
-	s = s.replace(/^static[ ]+(const[ ]+)?(float[234x]*|int[234]?|uint[234]?|bool)[ ]+(\w+)[ ]*=[ ]*([^;{«]*?);/gm,
-		function (match, isConst, type, name, init, offset) {
+	var callRe = /\b(?!(?:float[234]?(?:x[234])?|int[234]?|uint[234]?|bool)\b)[A-Za-z_]\w*\s*\(/;
+	function topLevelItems(list)
+	{
+		var items = [];
+		var depth = 0;
+		var start = 0;
+		for (var i = 0; i < list.length; i++)
+		{
+			var c = list[i];
+			if (c === '(' || c === '[') { depth++; }
+			else if (c === ')' || c === ']') { depth--; }
+			else if (c === ',' && depth === 0) { items.push(list.slice(start, i)); start = i + 1; }
+		}
+		items.push(list.slice(start));
+		return items.map(function (item) { return item.replace(/\s+/g, ' ').trim(); });
+	}
+	s = s.replace(/^static[ ]+(const[ ]+)?([A-Za-z_]\w*)[ ]+(\w+)[ ]*(\[[^\[\]\n]*\])?[ ]*=[ ]*(\{[^;{}«]*\}|[^;{«]*?)[ ]*;/gm,
+		function (match, isConst, type, name, dims, init, offset) {
 			if (!globals[offset]) { return match; }
-			var callRe = /\b(?!(?:float[234]?(?:x[234])?|int[234]?|uint[234]?|bool)\b)[A-Za-z_]\w*\s*\(/;
+			var isList = init[0] === '{';
+			if (!dims !== !isList) { return match; }
 			var usesHoisted = hoisted.some(function (h) { return new RegExp('(?<![\\w.])' + h + '(?!\\w)').test(init); });
 			if (!callRe.test(init) && !usesHoisted) { return match; }
 			hoisted.push(name);
-			globalInits.push(name + ' = ' + init.replace(/\s+/g, ' ').trim() + ';');
-			return 'static ' + type + ' ' + name + ';';
+			if (isList)
+			{
+				topLevelItems(init.slice(1, -1)).forEach(function (item, i)
+				{
+					if (item) { globalInits.push(name + '[' + i + '] = ' + item + ';'); }
+				});
+			}
+			else { globalInits.push(name + ' = ' + init.replace(/\s+/g, ' ').trim() + ';'); }
+			return 'static ' + type + ' ' + name + (dims || '') + ';';
 		});
 	ctx.globalInits = globalInits;
 	ctx.src = s;
@@ -3413,8 +3440,36 @@ function rewriteArrayConstructors(src, structNames)
 //
 // In GLSL a matrix built from one scalar has that scalar on its diagonal and zeros elsewhere, so
 // mat3(1.0) is the identity. ReShade FX wants every element spelled out (X3014). The diagonal is
-// the same whichever way the matrix is stored. A matrix built from another matrix is left alone.
+// the same whichever way the matrix is stored.
+//
+// A matrix built from a matrix of another size (mat3(m4), mat4(m3)) keeps the overlapping
+// upper-left elements and takes the rest from the identity. ReShade FX has neither that
+// constructor nor a truncating matrix cast, so the rows of the stored matrix are spelled out:
+//   float3x3(m4)  →  float3x3(m4[0].xyz, m4[1].xyz, m4[2].xyz)
+//   float3x3(m2)  →  float3x3(float3(m2[0], 0.0), float3(m2[1], 0.0), float3(0.0, 0.0, 1.0))
+// A stored row is a GLSL column, and the identity is the same either way, so this holds for
+// the transposed storage too.
 // ─────────────────────────────────────────────────────────────────────────────
+
+function matrixFromMatrixConstructor(name, target, source, text)
+{
+	var swizzle = 'xyzw';
+	var operand = /^[\w.]+(?:\[[^\[\]]*\])*$/.test(text) ? text : '(' + text + ')';
+	var rows = [];
+	for (var row = 0; row < target.rows; row++)
+	{
+		var parts = [];
+		var taken = 0;
+		if (row < source.rows)
+		{
+			taken = Math.min(target.cols, source.cols);
+			parts.push(operand + '[' + row + ']' + (taken === source.cols ? '' : '.' + swizzle.slice(0, taken)));
+		}
+		for (var col = taken; col < target.cols; col++) { parts.push(row === col ? '1.0' : '0.0'); }
+		rows.push(parts.length === 1 && taken === target.cols ? parts[0] : 'float' + target.cols + '(' + parts.join(', ') + ')');
+	}
+	return name + '(' + rows.join(', ') + ')';
+}
 
 function rewriteDiagonalMatrices(src, messages)
 {
@@ -3424,6 +3479,10 @@ function rewriteDiagonalMatrices(src, messages)
 		var target = anParseType(node.ctor || node.name);
 		if (!target || target.kind !== 'mat') { return null; }
 		var argType = node.args[0].type && anParseType(node.args[0].type);
+		if (argType && argType.kind === 'mat' && (argType.rows !== target.rows || argType.cols !== target.cols))
+		{
+			return matrixFromMatrixConstructor(node.name, target, argType, render(node.args[0]));
+		}
 		if (!argType || argType.kind !== 'scalar') { return null; }
 
 		var text = render(node.args[0]);
@@ -3448,7 +3507,8 @@ function rewriteDiagonalMatrices(src, messages)
 //   lessThan(a, b)  lessThanEqual  greaterThan  greaterThanEqual  equal  notEqual  →  a < b  and so on
 //   not(x)                                                                          →  !x
 //   roundEven → round    floatBitsToInt → asint    floatBitsToUint → asuint
-//   intBitsToFloat / uintBitsToFloat → asfloat
+//   intBitsToFloat / uintBitsToFloat → asfloat    fma → mad
+//   dFdxFine / dFdyFine / dFdxCoarse / dFdyCoarse → ddx_fine / ddy_fine / ddx_coarse / ddy_coarse
 //
 // ReShade FX has none of the comparison functions, but its operators work on vectors and give
 // a bool vector, which is what GLSL's functions return. A function the shader defines itself
@@ -3456,7 +3516,10 @@ function rewriteDiagonalMatrices(src, messages)
 // ─────────────────────────────────────────────────────────────────────────────
 
 var GLSL_COMPARISON_FUNCTIONS = { lessThan: '<', lessThanEqual: '<=', greaterThan: '>', greaterThanEqual: '>=', equal: '==', notEqual: '!=' };
-var GLSL_RENAMED_BUILTINS = { roundEven: 'round', floatBitsToInt: 'asint', floatBitsToUint: 'asuint', intBitsToFloat: 'asfloat', uintBitsToFloat: 'asfloat' };
+var GLSL_RENAMED_BUILTINS = {
+	roundEven: 'round', floatBitsToInt: 'asint', floatBitsToUint: 'asuint', intBitsToFloat: 'asfloat', uintBitsToFloat: 'asfloat',
+	fma: 'mad', dFdxFine: 'ddx_fine', dFdyFine: 'ddy_fine', dFdxCoarse: 'ddx_coarse', dFdyCoarse: 'ddy_coarse'
+};
 
 function rewriteGlslBuiltins(src)
 {
@@ -3722,6 +3785,54 @@ function injectGlslHelpers(src)
 	{
 		helpers += 'float2 unpackHalf2x16(uint bits)\n{\n\treturn f16tof32(uint2(bits, bits >> 16));\n}\n\n';
 	}
+	function definesFunction(name)
+	{
+		return new RegExp('\\b\\w+\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{').test(src);
+	}
+	function needs(name)
+	{
+		return new RegExp('\\b' + name + '\\s*\\(').test(src) && !definesFunction(name);
+	}
+	function sizes(make)
+	{
+		return [1, 2, 3, 4].map(function (n) { return make(n === 1 ? '' : String(n)); }).join('');
+	}
+	// The inverse hyperbolic functions ReShade FX lacks, component-wise like their GLSL versions.
+	if (needs('acosh'))
+	{
+		helpers += sizes(function (n) { return 'float' + n + ' acosh(float' + n + ' x)\n{\n\treturn log(x + sqrt(x * x - 1.0));\n}\n\n'; });
+	}
+	if (needs('atanh'))
+	{
+		helpers += sizes(function (n) { return 'float' + n + ' atanh(float' + n + ' x)\n{\n\treturn 0.5 * log((1.0 + x) / (1.0 - x));\n}\n\n'; });
+	}
+	// GLSL's bit-counting functions return int, also for uint arguments, and findLSB/findMSB give
+	// -1 when no bit is found. ReShade FX's countbits/firstbitlow/firstbithigh return uint, so an
+	// int result is restored by these helpers; comparisons such as findMSB(x) < 0 then still work.
+	[['bitCount', 'countbits'], ['findLSB', 'firstbitlow'], ['findMSB', 'firstbithigh'], ['bitfieldReverse', 'reversebits']].forEach(function (pair)
+	{
+		if (!needs(pair[0])) { return; }
+		helpers += sizes(function (n)
+		{
+			var signedArg = pair[1] === 'firstbithigh' ? 'x' : 'uint' + n + '(x)';
+			var uintResult = pair[1] === 'reversebits' ? 'uint' + n : 'int' + n;
+			return 'int' + n + ' ' + pair[0] + '(int' + n + ' x)\n{\n\treturn int' + n + '(' + pair[1] + '(' + signedArg + '));\n}\n\n'
+				+ uintResult + ' ' + pair[0] + '(uint' + n + ' x)\n{\n\treturn ' + uintResult + '(' + pair[1] + '(x));\n}\n\n';
+		});
+	});
+	// GLSL's packing functions: the first component goes into the lowest bits.
+	var packing = {
+		packHalf2x16: 'uint packHalf2x16(float2 v)\n{\n\tuint2 h = f32tof16(v);\n\treturn h.x | (h.y << 16);\n}\n\n',
+		packUnorm2x16: 'uint packUnorm2x16(float2 v)\n{\n\tuint2 b = uint2(round(saturate(v) * 65535.0));\n\treturn b.x | (b.y << 16);\n}\n\n',
+		packSnorm2x16: 'uint packSnorm2x16(float2 v)\n{\n\tuint2 b = uint2(int2(round(clamp(v, -1.0, 1.0) * 32767.0))) & 0xFFFFu;\n\treturn b.x | (b.y << 16);\n}\n\n',
+		unpackUnorm2x16: 'float2 unpackUnorm2x16(uint p)\n{\n\treturn float2(uint2(p, p >> 16) & 0xFFFFu) / 65535.0;\n}\n\n',
+		unpackSnorm2x16: 'float2 unpackSnorm2x16(uint p)\n{\n\treturn clamp(float2(int2(uint2(p << 16, p)) >> 16) / 32767.0, -1.0, 1.0);\n}\n\n',
+		packUnorm4x8: 'uint packUnorm4x8(float4 v)\n{\n\tuint4 b = uint4(round(saturate(v) * 255.0));\n\treturn b.x | (b.y << 8) | (b.z << 16) | (b.w << 24);\n}\n\n',
+		packSnorm4x8: 'uint packSnorm4x8(float4 v)\n{\n\tuint4 b = uint4(int4(round(clamp(v, -1.0, 1.0) * 127.0))) & 0xFFu;\n\treturn b.x | (b.y << 8) | (b.z << 16) | (b.w << 24);\n}\n\n',
+		unpackUnorm4x8: 'float4 unpackUnorm4x8(uint p)\n{\n\treturn float4(uint4(p, p >> 8, p >> 16, p >> 24) & 0xFFu) / 255.0;\n}\n\n',
+		unpackSnorm4x8: 'float4 unpackSnorm4x8(uint p)\n{\n\treturn clamp(float4(int4(uint4(p << 24, p << 16, p << 8, p)) >> 24) / 127.0, -1.0, 1.0);\n}\n\n'
+	};
+	Object.keys(packing).forEach(function (name) { if (needs(name)) { helpers += packing[name]; } });
 	['inverse', 'outerProduct', 'matrixCompMult'].forEach(function (name)
 	{
 		if (!new RegExp('\\b' + name + '\\s*\\(').test(src)) { return; }
