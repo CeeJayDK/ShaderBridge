@@ -21,6 +21,15 @@ const asinhPort = port('', 'vec3 v=asinh(vec3(-1.,0.,1.));fragColor=vec4(v,1.);'
 check('asinh vector results keep their vector type', has(asinhPort, 'float4(v,1.)'), asinhPort.out);
 check('asinh compatibility provides scalar and vector overloads', [1,2,3,4].every(n => asinhPort.out.includes((n===1?'float':'float'+n)+' asinh(')));
 check('asinh helper is not added without a call', !porter.injectGlslHelpers('float f(){return 1.;}').includes('asinh'));
+const bitPort = port('', 'uint u = uint(fragCoord.x); int i = int(fragCoord.y); fragColor = vec4(float(bitCount(u) + findLSB(i) + findMSB(u)), float(bitfieldReverse(i)), fma(1., 2., 3.), dFdxFine(fragCoord.x) + dFdyCoarse(fragCoord.y));');
+check('bit-counting helpers return int for int and uint arguments', has(bitPort, 'int bitCount(uint x)') && has(bitPort, 'int2 bitCount(int2 x)') && has(bitPort, 'return int(firstbitlow(uint(x)));') && has(bitPort, 'int findMSB(int x)\n{\n\treturn int(firstbithigh(x));'), bitPort.out);
+check('bitfieldReverse keeps the argument type', has(bitPort, 'uint3 bitfieldReverse(uint3 x)') && has(bitPort, 'int bitfieldReverse(int x)'), bitPort.out);
+check('fma and the fine and coarse derivatives are renamed', has(bitPort, 'mad(1., 2., 3.)') && has(bitPort, 'ddx_fine(fragCoord.x)') && has(bitPort, 'ddy_coarse(fragCoord.y)'), bitPort.out);
+check('a shader that defines bitCount itself keeps it', porter.injectGlslHelpers('float bitCount(int x){return 1.;}\nfloat y=bitCount(2);') === 'float bitCount(int x){return 1.;}\nfloat y=bitCount(2);');
+const hyperbolic = porter.injectGlslHelpers('float a = acosh(2.); float3 b = atanh(float3(.5));');
+check('acosh and atanh have scalar and vector overloads', [1, 2, 3, 4].every(n => hyperbolic.includes((n === 1 ? 'float' : 'float' + n) + ' acosh(') && hyperbolic.includes((n === 1 ? 'float' : 'float' + n) + ' atanh(')), hyperbolic);
+const packing = porter.injectGlslHelpers('uint a = packUnorm4x8(v); float2 b = unpackSnorm2x16(a); uint c = packHalf2x16(b);');
+check('packing helpers are added only for the functions that are called', packing.includes('uint packUnorm4x8(float4 v)') && packing.includes('float2 unpackSnorm2x16(uint p)') && packing.includes('uint packHalf2x16(float2 v)') && !packing.includes('unpackUnorm4x8'), packing);
 check('custom asinh definitions are preserved', porter.injectGlslHelpers('float asinh(float x){return x;}')==='float asinh(float x){return x;}');
 function staticGlobals(src){const ctx={src};porter.stepStaticGlobals(ctx);return ctx.src;}
 function logicalXor(expr){const ctx={src:'bool f(bool a,bool b,bool c){return '+expr+';}',messages:[]};porter.stepLogicalXor(ctx);return ctx.src;}
@@ -223,6 +232,12 @@ check('a scalar expression is repeated on the diagonal', dm('float2x2 m = float2
 check('a non-square matrix is filled by position', dm('float2x3 m = float2x3(s);') === 'float2x3 m = float2x3(s, 0.0, 0.0, 0.0, s, 0.0);');
 check('four scalars are left alone', dm('float2x2 m = float2x2(s, s, s, s);') === 'float2x2 m = float2x2(s, s, s, s);');
 check('a matrix built from vectors is left alone', dm('float2x2 m = float2x2(float2(s, s), float2(s, s));') === 'float2x2 m = float2x2(float2(s, s), float2(s, s));');
+check('a smaller matrix from a larger one keeps the upper-left rows', porter.rewriteDiagonalMatrices('float4 f(float4x4 b)\n{\n\tfloat3x3 n = float3x3(b);\n\treturn n[0].xyzz;\n}\n', []).includes('float3x3(b[0].xyz, b[1].xyz, b[2].xyz)'));
+check('a larger matrix from a smaller one is completed with the identity', porter.rewriteDiagonalMatrices('float4 f(float2x2 b)\n{\n\tfloat3x3 n = float3x3(b);\n\treturn n[0].xyzz;\n}\n', []).includes('float3x3(float3(b[0], 0.0), float3(b[1], 0.0), float3(0.0, 0.0, 1.0))'));
+check('an expression is parenthesised before its rows are taken', porter.rewriteDiagonalMatrices('float4 f(float4x4 a, float4x4 b)\n{\n\tfloat2x2 n = float2x2(mul(a, b));\n\treturn n[0].xyxy;\n}\n', []).includes('float2x2((mul(a, b))[0].xy, (mul(a, b))[1].xy)'));
+check('a matrix of the same size is left alone', porter.rewriteDiagonalMatrices('float4 f(float3x3 b)\n{\n\tfloat3x3 n = float3x3(b);\n\treturn n[0].xyzz;\n}\n', []).includes('float3x3 n = float3x3(b);'));
+r = port('', 'mat4 m4 = mat4(1.0); mat3 n = mat3(m4); mat4 b = mat4(n); fragColor = vec4(n[0], b[3].w);');
+check('through the whole pipeline: matrices resized both ways', has(r, 'float3x3(m4[0].xyz, m4[1].xyz, m4[2].xyz)') && has(r, 'float4x4(float4(n[0], 0.0), float4(n[1], 0.0), float4(n[2], 0.0), float4(0.0, 0.0, 0.0, 1.0))'), r.out);
 r = port('', 'mat3 m = mat3(1.0); vec3 p = m * vec3(fragCoord, 1.); fragColor = vec4(p, 1.);');
 check('through the whole pipeline: identity, then the matrix multiply', has(r, 'float3x3(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)') && has(r, 'mul('), r.out);
 
@@ -559,6 +574,11 @@ hz = hoist('#define ROT(a) mat2(cos(a), sin(a), -sin(a), cos(a))\nconst mat2 rot
 check('the Appolloian pattern: a matrix, and two more built from it', same(hz.globalInits, ['rot0 = ROT(0.0);', 'g_rot0 = rot0;', 'g_rot1 = rot0;']), JSON.stringify(hz.globalInits));
 hz = hoist('float one = 1.0;\nfloat s0 = sin(one);\nfloat two = 2.0;\nfloat t = s0 + two;\n');
 check('unrelated globals in between stay, and the order is kept', same(hz.globalInits, ['s0 = sin(one);', 't = s0 + two;']) && /static float two = 2\.0;/.test(hz.src), JSON.stringify(hz.globalInits));
+
+hz = hoist('struct Mat { vec3 albedo; float rough; };\nconst Mat single = Mat(vec3(1.), .5);\nconst Mat mats[2] = Mat[2](Mat(vec3(1.), .5), Mat(vec3(0.), .25));\nconst float waves[2] = float[](sin(1.), 2.);\nconst float plain[2] = float[](1., 2.);\n');
+check('a struct value built by its constructor helper is hoisted', hz.globalInits.indexOf('single = Mat_ctor(float3(1., 1., 1.), .5);') >= 0 && /static Mat single;/.test(hz.src), JSON.stringify(hz.globalInits) + hz.src);
+check('an array with calls is assigned element by element', same(hz.globalInits.slice(1), ['mats[0] = Mat_ctor(float3(1., 1., 1.), .5);', 'mats[1] = Mat_ctor(float3(0., 0., 0.), .25);', 'waves[0] = sin(1.);', 'waves[1] = 2.;']) && /static Mat mats\[2\];/.test(hz.src) && /static float waves\[2\];/.test(hz.src), JSON.stringify(hz.globalInits) + hz.src);
+check('an array of literals keeps its initialiser', /static const float plain\[2\]\s*=\s*\{1\., 2\.\};/.test(hz.src), hz.src);
 
 // ── several variables in one global declaration (3.0.33)
 const bits = porter.transformGLSL('void mainImage(out vec4 c, vec2 p) { int k = int(p.x); c = vec4(float((k >> 1) & 1)); }', [], 'Image').src;
