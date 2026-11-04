@@ -96,7 +96,9 @@ Those calls produce explicit conversion errors requiring a manual rewrite. Basic
 ordinary texture offsets and integer fetch offsets compile for both DX9 and DX11.
 
 Statement-level conditional expressions are lowered to `if`/`else` blocks, including
-comma-expression arms and complete comma chains used as unbraced loop bodies. This
+comma-expression arms, comma chains used as unbraced loop bodies, and conditional
+`for` updates. Loop updates retain their order relative to conditions, `continue`
+and `break`, and retain access to the loop scope when the body shadows a name. This
 preserves selected-arm side effects in ReShade, which otherwise evaluates both ternary arms.
 
 Numeric functions without a proven return on every path receive a zero fallback, with a

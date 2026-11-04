@@ -53,5 +53,23 @@ check('unbraced array writes allow unrolling', count(hint('void f(){float a[4];f
 check('writes in an else arm are included in the loop', count(hint('void f(){float a[4];for(int k=0;k<4;k++)if(k<2){}else{a[k]=float(k);}}')) === 0);
 check('unrelated loops keep their DX9 hint', count(hint('void f(){float a[4];for(int k=0;k<4;k++){a[k]=float(k);}float x=0.;for(int j=0;j<4;j++){x+=j;}}')) === 1);
 check('array reads keep the rolled-loop hint', count(hint('float f(float a[4]){float x=0.;for(int k=0;k<4;k++){x+=a[k];}return x;}')) === 1);
+function conditional(src)
+{
+	const ctx = {src: src};
+	porter.stepConditionalStatements(ctx);
+	return ctx.src;
+}
+const update = 'void f(){float sum=0.;for(int k=0;k<4;(k<2?sum+=1.:sum+=2.),k++){if(k==1)continue;if(k==3)break;{float sum=99.;}}}';
+const lowered = conditional(update);
+check('conditional loop updates become branches', !lowered.includes('?') && lowered.includes('if (k<2)'));
+check('update runs before the next condition, including on continue', lowered.indexOf('sum+=1.;') < lowered.indexOf('if (!(k<4))') && lowered.includes('continue;'));
+check('body scope and break remain intact', lowered.includes('{float sum=99.;}') && lowered.includes('if(k==3)break;'));
+check('ordinary updates stay unchanged', conditional('void f(){for(int k=0;k<4;k++)x++;}') === 'void f(){for(int k=0;k<4;k++)x++;}');
+check('unbraced if/else loop body stays together', conditional('void f(){for(int k=0;k<4;k<2?k++:k+=2)if(x)y++;else y--;}').includes('if(x)y++;else y--;'));
+check('empty conditions are supported', conditional('void f(){int k=0;for(;;k<2?k++:k+=2){if(k>5)break;}}').includes('for (; ; )'));
+check('nested conditional updates are both lowered', !conditional('void f(){for(int a=0;a<2;a<1?a++:a+=2)for(int b=0;b<2;b<1?b++:b+=2)x++;}').includes('?'));
+check('explicit attributes stay attached to a loop', /\[loop\]\s*for/.test(conditional('void f(){[loop]for(int k=0;k<4;k<2?k++:k+=2)x++;}')));
+check('generated names avoid user identifiers', conditional('void f(){bool ST_for_first_0=false;for(int k=0;k<4;k<2?k++:k+=2)x++;}').includes('bool ST_for_first_1 = true;'));
+check('lowering is idempotent', conditional(lowered) === lowered);
 console.log((total - bad) + '/' + total + ' loop tests OK');
 process.exit(bad ? 1 : 0);

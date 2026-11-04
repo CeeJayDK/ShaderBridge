@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.5.10';
+var PORTER_VERSION = '3.5.11';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -1192,6 +1192,84 @@ function stepConditionalStatements(ctx)
 		if (node.kind === 'sequence') { return node.items.map(function (item, i) { return emit(item, i === node.items.length - 1 ? prefix : ''); }).join('\n'); }
 		if (!prefix && node.kind === 'assign' && branches(node.right)) { return emit(node.right, A.textOf(node.left) + ' ' + node.op + ' '); }
 		return prefix ? prefix + '(' + A.textOf(node) + ');' : A.textOf(node) + ';';
+	}
+	// A for-update runs after both normal completion and continue, but never
+	// after break. Run it at the next iteration's start, before the condition,
+	// keeping the original body in its own scope (including shadowed names).
+	var loopChanged = true, serial = 0;
+	while (loopChanged)
+	{
+		loopChanged = false;
+		function token(i) { return A.tokens[A.sig[i]]; }
+		function text(i) { return token(i) ? token(i).text : ''; }
+		function close(i)
+		{
+			var right = { '(': ')', '[': ']', '{': '}' }[text(i)], depth = 1;
+			for (var j = i + 1; j < A.sig.length; j++)
+			{
+				if (text(j) === text(i)) { depth++; }
+				else if (text(j) === right && --depth === 0) { return j + 1; }
+			}
+			return A.sig.length;
+		}
+		function statementEnd(i)
+		{
+			while (text(i) === '[') { i = close(i); }
+			if (text(i) === '{') { return close(i); }
+			if (/^(for|while|switch|if)$/.test(text(i)) && text(i + 1) === '(')
+			{
+				var conditional = text(i) === 'if', end = statementEnd(close(i + 1));
+				return conditional && text(end) === 'else' ? statementEnd(end + 1) : end;
+			}
+			if (text(i) === 'do') { return close(statementEnd(i + 1) + 1) + 1; }
+			for (; i < A.sig.length; i++)
+			{
+				if (text(i) === '(' || text(i) === '[') { i = close(i) - 1; }
+				else if (text(i) === ';') { return i + 1; }
+			}
+			return i;
+		}
+		for (var i = A.sig.length - 1; i >= 0; i--)
+		{
+			if (text(i) !== 'for' || text(i + 1) !== '(') { continue; }
+			var headerEnd = close(i + 1), separators = [];
+			for (var j = i + 2; j < headerEnd - 1; j++)
+			{
+				if (text(j) === '(' || text(j) === '[') { j = close(j) - 1; }
+				else if (text(j) === ';') { separators.push(j); }
+			}
+			if (separators.length !== 2) { continue; }
+			var roots = [], at = separators[1] + 1;
+			while (at < headerEnd - 1)
+			{
+				var parsed = A.parseExpr(at);
+				if (!parsed || parsed.next <= at) { break; }
+				roots.push(parsed.node); at = parsed.next;
+				if (text(at) === ',') { at++; } else { break; }
+			}
+			if (at !== headerEnd - 1 || !roots.some(branches)) { continue; }
+			var end = statementEnd(headerEnd), first;
+			do { first = 'ST_for_first_' + serial++; } while (ctx.src.indexOf(first) >= 0);
+			var begin = i;
+			// Keep explicit attributes attached to the new loop, inside its scope.
+			while (text(begin - 1) === ']')
+			{
+				var open = begin - 2;
+				while (open >= 0 && text(open) !== '[') { open--; }
+				if (open < 0) { break; }
+				begin = open;
+			}
+			var attrs = ctx.src.slice(token(begin).start, token(i).start);
+			var init = ctx.src.slice(token(i + 1).end, token(separators[0]).start);
+			var condition = ctx.src.slice(token(separators[0]).end, token(separators[1]).start).trim();
+			var body = ctx.src.slice(token(headerEnd).start, token(end - 1).end);
+			var replacement = '{\nbool ' + first + ' = true;\n' + attrs + 'for (' + init + '; ; )\n{\n'
+				+ 'if (' + first + ') { ' + first + ' = false; }\nelse\n{\n'
+				+ roots.map(function (root) { return emit(root, ''); }).join('\n') + '\n}\n'
+				+ (condition ? 'if (!(' + condition + ')) { break; }\n' : '') + body + '\n}\n}';
+			ctx.src = ctx.src.slice(0, token(begin).start) + replacement + ctx.src.slice(token(end - 1).end);
+			A = analyzeSource(ctx.src); loopChanged = true; break;
+		}
 	}
 	A.eachExpression(function (node, statement)
 	{
