@@ -24,7 +24,7 @@ function anPromote(a, b)
 }
 
 // ── builtin function result types ───────────────────────────────────────────
-var AN_SAME_AS_ARG0 = 'abs sign floor ceil fract frac sin cos tan asin acos atan sinh cosh tanh asinh acosh atanh exp exp2 log log2 sqrt inversesqrt rsqrt normalize saturate radians degrees trunc round ddx ddy dFdx dFdy fwidth ddx_fine ddy_fine ddx_coarse ddy_coarse min max clamp pow mod fmod atan2 reflect refract mix lerp step smoothstep rcp fma mad bitfieldReverse reversebits bitfieldExtract bitfieldInsert uaddCarry'.split(' ');
+var AN_SAME_AS_ARG0 = 'abs sign floor ceil fract frac sin cos tan asin acos atan sinh cosh tanh asinh acosh atanh exp exp2 log log2 sqrt inversesqrt rsqrt normalize saturate radians degrees trunc round ddx ddy dFdx dFdy fwidth ddx_fine ddy_fine ddx_coarse ddy_coarse min max clamp pow mod fmod atan2 reflect refract mix lerp step smoothstep rcp'.split(' ');
 var AN_SCALAR_FLOAT = 'dot length distance determinant'.split(' ');
 var AN_BOOL_RESULT = 'any all isnan isinf'.split(' ');
 var AN_FLOAT4_RESULT = 'tex2D tex2Dlod tex2Dgrad tex2Dbias tex2Dfetch tex2Dproj tex3D tex3Dlod tex3Dfetch tex3Dgrad texCUBE texCUBElod texture texture2D textureLod textureGrad texelFetch textureCube textureCubeLod'.split(' ');
@@ -39,14 +39,8 @@ function anBuiltinType(name, args)
 		return bitArg && bitArg.cols === 1 ? anVec(bitResult, bitArg.rows) : null;
 	}
 	if (name === 'roundEven') { return t0; }
-	if (name === 'bitCount' || name === 'findLSB' || name === 'findMSB')
-	{
-		var countArg = t0 && anParseType(t0);
-		return countArg && countArg.cols === 1 ? anVec('int', countArg.rows) : null;
-	}
-	if (/^pack(?:Half2x16|[US]norm(?:2x16|4x8))$/.test(name)) { return 'uint'; }
-	if (/^unpack(?:Half2x16|[US]norm2x16)$/.test(name)) { return 'float2'; }
-	if (/^unpack[US]norm4x8$/.test(name)) { return 'float4'; }
+	if (/^pack(?:Half|[US]norm)2x16$/.test(name)) { return 'uint'; }
+	if (/^unpack(?:Half|[US]norm)2x16$/.test(name)) { return 'float2'; }
 	if (AN_SAME_AS_ARG0.indexOf(name) !== -1)
 	{
 		if (name === 'step') { return t1; }

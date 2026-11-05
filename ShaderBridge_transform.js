@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.5.13';
+var PORTER_VERSION = '3.5.14';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -1498,12 +1498,14 @@ function stepHoistGlobalInits(ctx)
 	// GLSL allows both, e.g.  float tau = atan(1.0)*8.0;  or  mat2 g = rot0;  The declaration stays,
 	// the assignment moves to the pass entry point where it runs before mainImage, in the order the
 	// declarations had. A global that is hoisted is no longer a constant, so an initialiser that uses
-	// one is hoisted as well, and so on down the file.
+	// one is hoisted as well, and so on down the file. So is one that reads a per-frame input.
 	//
 	// Struct values (S s = S_ctor(...)) and one-dimensional arrays ({a, f(b)}) are hoisted the same
 	// way; an array is assigned element by element, since HLSL has no array assignment from a list.
 	var globalInits = [];
-	var hoisted = [];
+	// Shadertoy's per-frame inputs are uniforms or values set in the entry point, never literals.
+	// WebGL (ANGLE) accepts them in a global initialiser, e.g.  vec2 drift = vec2(iTime);
+	var hoisted = ['iTime', 'iTimeDelta', 'iFrame', 'iFrameRate', 'iMouse', 'iDate', 'iChannelTime'];
 	var globals = fileScopeTokenOffsets(s);
 	var callRe = /\b(?!(?:float[234]?(?:x[234])?|int[234]?|uint[234]?|bool)\b)[A-Za-z_]\w*\s*\(/;
 	function topLevelItems(list)
@@ -3511,8 +3513,7 @@ function rewriteDiagonalMatrices(src, messages)
 //   lessThan(a, b)  lessThanEqual  greaterThan  greaterThanEqual  equal  notEqual  →  a < b  and so on
 //   not(x)                                                                          →  !x
 //   roundEven → round    floatBitsToInt → asint    floatBitsToUint → asuint
-//   intBitsToFloat / uintBitsToFloat → asfloat    fma → mad
-//   dFdxFine / dFdyFine / dFdxCoarse / dFdyCoarse → ddx_fine / ddy_fine / ddx_coarse / ddy_coarse
+//   intBitsToFloat / uintBitsToFloat → asfloat
 //
 // ReShade FX has none of the comparison functions, but its operators work on vectors and give
 // a bool vector, which is what GLSL's functions return. A function the shader defines itself
@@ -3520,10 +3521,7 @@ function rewriteDiagonalMatrices(src, messages)
 // ─────────────────────────────────────────────────────────────────────────────
 
 var GLSL_COMPARISON_FUNCTIONS = { lessThan: '<', lessThanEqual: '<=', greaterThan: '>', greaterThanEqual: '>=', equal: '==', notEqual: '!=' };
-var GLSL_RENAMED_BUILTINS = {
-	roundEven: 'round', floatBitsToInt: 'asint', floatBitsToUint: 'asuint', intBitsToFloat: 'asfloat', uintBitsToFloat: 'asfloat',
-	fma: 'mad', dFdxFine: 'ddx_fine', dFdyFine: 'ddy_fine', dFdxCoarse: 'ddx_coarse', dFdyCoarse: 'ddy_coarse'
-};
+var GLSL_RENAMED_BUILTINS = { roundEven: 'round', floatBitsToInt: 'asint', floatBitsToUint: 'asuint', intBitsToFloat: 'asfloat', uintBitsToFloat: 'asfloat' };
 
 function rewriteGlslBuiltins(src)
 {
@@ -3810,70 +3808,15 @@ function injectGlslHelpers(src)
 	{
 		helpers += sizes(function (n) { return 'float' + n + ' atanh(float' + n + ' x)\n{\n\treturn 0.5 * log((1.0 + x) / (1.0 - x));\n}\n\n'; });
 	}
-	// GLSL's bit-counting functions return int, also for uint arguments, and findLSB/findMSB give
-	// -1 when no bit is found. ReShade FX's countbits/firstbitlow/firstbithigh return uint, so an
-	// int result is restored by these helpers; comparisons such as findMSB(x) < 0 then still work.
-	[['bitCount', 'countbits'], ['findLSB', 'firstbitlow'], ['findMSB', 'firstbithigh'], ['bitfieldReverse', 'reversebits']].forEach(function (pair)
-	{
-		if (!needs(pair[0])) { return; }
-		helpers += sizes(function (n)
-		{
-			var signedArg = pair[1] === 'firstbithigh' ? 'x' : 'uint' + n + '(x)';
-			var uintResult = pair[1] === 'reversebits' ? 'uint' + n : 'int' + n;
-			return 'int' + n + ' ' + pair[0] + '(int' + n + ' x)\n{\n\treturn int' + n + '(' + pair[1] + '(' + signedArg + '));\n}\n\n'
-				+ uintResult + ' ' + pair[0] + '(uint' + n + ' x)\n{\n\treturn ' + uintResult + '(' + pair[1] + '(x));\n}\n\n';
-		});
-	});
-	// GLSL's packing functions: the first component goes into the lowest bits.
+	// GLSL ES 3.00's packing functions: the first component goes into the lowest bits.
 	var packing = {
 		packHalf2x16: 'uint packHalf2x16(float2 v)\n{\n\tuint2 h = f32tof16(v);\n\treturn h.x | (h.y << 16);\n}\n\n',
 		packUnorm2x16: 'uint packUnorm2x16(float2 v)\n{\n\tuint2 b = uint2(round(saturate(v) * 65535.0));\n\treturn b.x | (b.y << 16);\n}\n\n',
 		packSnorm2x16: 'uint packSnorm2x16(float2 v)\n{\n\tuint2 b = uint2(int2(round(clamp(v, -1.0, 1.0) * 32767.0))) & 0xFFFFu;\n\treturn b.x | (b.y << 16);\n}\n\n',
 		unpackUnorm2x16: 'float2 unpackUnorm2x16(uint p)\n{\n\treturn float2(uint2(p, p >> 16) & 0xFFFFu) / 65535.0;\n}\n\n',
-		unpackSnorm2x16: 'float2 unpackSnorm2x16(uint p)\n{\n\treturn clamp(float2(int2(uint2(p << 16, p)) >> 16) / 32767.0, -1.0, 1.0);\n}\n\n',
-		packUnorm4x8: 'uint packUnorm4x8(float4 v)\n{\n\tuint4 b = uint4(round(saturate(v) * 255.0));\n\treturn b.x | (b.y << 8) | (b.z << 16) | (b.w << 24);\n}\n\n',
-		packSnorm4x8: 'uint packSnorm4x8(float4 v)\n{\n\tuint4 b = uint4(int4(round(clamp(v, -1.0, 1.0) * 127.0))) & 0xFFu;\n\treturn b.x | (b.y << 8) | (b.z << 16) | (b.w << 24);\n}\n\n',
-		unpackUnorm4x8: 'float4 unpackUnorm4x8(uint p)\n{\n\treturn float4(uint4(p, p >> 8, p >> 16, p >> 24) & 0xFFu) / 255.0;\n}\n\n',
-		unpackSnorm4x8: 'float4 unpackSnorm4x8(uint p)\n{\n\treturn clamp(float4(int4(uint4(p << 24, p << 16, p << 8, p)) >> 24) / 127.0, -1.0, 1.0);\n}\n\n'
+		unpackSnorm2x16: 'float2 unpackSnorm2x16(uint p)\n{\n\treturn clamp(float2(int2(uint2(p << 16, p)) >> 16) / 32767.0, -1.0, 1.0);\n}\n\n'
 	};
 	Object.keys(packing).forEach(function (name) { if (needs(name)) { helpers += packing[name]; } });
-	// bitfieldExtract sign-extends the field for int and zero-extends it for uint: shift the field
-	// to the top, then back down (arithmetic for int). A field of 0 bits gives 0, which the shifts
-	// cannot express (a shift by 32 is undefined).
-	if (needs('bitfieldExtract'))
-	{
-		helpers += sizes(function (n)
-		{
-			return ['int', 'uint'].map(function (base)
-			{
-				var type = base + n;
-				return type + ' bitfieldExtract(' + type + ' value, int offset, int bits)\n{\n\tif (bits <= 0)\n\t{\n\t\treturn (' + type + ')0;\n\t}\n'
-					+ '\treturn (value << uint(32 - offset - bits)) >> uint(32 - bits);\n}\n\n';
-			}).join('');
-		});
-	}
-	// bitfieldInsert replaces bits [offset, offset + bits) of base with the low bits of insert.
-	if (needs('bitfieldInsert'))
-	{
-		helpers += sizes(function (n)
-		{
-			var u = 'uint' + n, i = 'int' + n;
-			return u + ' bitfieldInsert(' + u + ' base, ' + u + ' insert, int offset, int bits)\n{\n'
-				+ '\tuint mask = (bits >= 32 ? 0xFFFFFFFFu : ((1u << uint(bits)) - 1u)) << uint(offset);\n'
-				+ '\treturn (base & ~mask) | ((insert << uint(offset)) & mask);\n}\n\n'
-				+ i + ' bitfieldInsert(' + i + ' base, ' + i + ' insert, int offset, int bits)\n{\n'
-				+ '\treturn ' + i + '(bitfieldInsert(' + u + '(base), ' + u + '(insert), offset, bits));\n}\n\n';
-		});
-	}
-	// uaddCarry returns the 32-bit sum and sets carry to 1 where the addition wrapped around.
-	if (needs('uaddCarry'))
-	{
-		helpers += sizes(function (n)
-		{
-			var u = 'uint' + n;
-			return u + ' uaddCarry(' + u + ' x, ' + u + ' y, out ' + u + ' carry)\n{\n\t' + u + ' sum = x + y;\n\tcarry = ' + u + '(sum < x);\n\treturn sum;\n}\n\n';
-		});
-	}
 	['inverse', 'outerProduct', 'matrixCompMult'].forEach(function (name)
 	{
 		if (!new RegExp('\\b' + name + '\\s*\\(').test(src)) { return; }
@@ -4299,21 +4242,6 @@ function rewriteArrayLength(src, messages)
 	src.replace(lengthPattern, function (match, before, name)
 	{
 		var sizes = sizesOf(name);
-		if (sizes.length === 0)
-		{
-			// GLSL also gives vectors (components) and matrices (columns) a length(). A GLSL
-			// matrix column is a stored row, so both are the first dimension of the HLSL type.
-			if (!arrayDecls) { arrayDecls = analyzeSource(src).decls; }
-			var counts = arrayDecls.filter(function (d) { return d.name === name; }).map(function (d)
-			{
-				var parsed = anParseType(d.type);
-				return parsed && parsed.kind !== 'scalar' ? parsed.rows : null;
-			});
-			if (counts.length && counts.every(function (c) { return c !== null && c === counts[0]; }))
-			{
-				replaced++; replacements[name] = String(counts[0]); return match;
-			}
-		}
 		var distinct = sizes.filter(function (v, i) { return sizes.indexOf(v) === i; });
 		if (distinct.length === 1 && distinct[0] !== null) { replaced++; replacements[name] = /^\d+$/.test(String(distinct[0])) ? String(distinct[0]) : '(' + distinct[0] + ')'; return match; }
 		if (distinct.length > 1 && distinct.indexOf(null) < 0)
@@ -4343,7 +4271,7 @@ function rewriteArrayLength(src, messages)
 
 	if (messages && replaced > 0)
 	{
-		messages.push({ level: 'info', text: replaced + ' length() call(s) replaced with the size of the array, vector or matrix.' });
+		messages.push({ level: 'info', text: replaced + ' array length() call(s) replaced with the size of the array.' });
 	}
 	var names = Object.keys(unresolved);
 	if (messages && names.length > 0)
