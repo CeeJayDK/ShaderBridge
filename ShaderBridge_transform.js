@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.5.14';
+var PORTER_VERSION = '3.5.15';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -3324,10 +3324,11 @@ function rewriteTextureVFlip(src, samplerFlags)
 // ─────────────────────────────────────────────────────────────────────────────
 // Rename identifiers that ReShade FX reserves.
 //
-// GLSL lets a shader call a variable half, matrix, vector, texture, string, sample, register ...
+// GLSL lets a shader call a variable matrix, vector, texture, string, linear, shared, register ...
 // but each of those is a keyword to the ReShade FX compiler. The list is the keyword table of
-// ReShade's own lexer (effect_lexer.cpp), minus the words GLSL itself uses as keywords or types
-// (if, const, struct, sampler2D ...) and the preprocessor directive names. A reserved word gets a
+// ReShade's own lexer (effect_lexer.cpp), minus the words GLSL ES 3.00 itself uses as keywords or
+// types (if, const, struct, sampler2D ...) or reserves (half, sample, extern, union ...; WebGL rejects
+// them, so no Shadertoy shader has them), and the preprocessor directive names. A reserved word gets a
 // trailing underscore, everywhere: declarations, uses, struct fields and #define lines.
 //
 // texture / texture1D / texture2D / texture3D are also GLSL's sampling functions, so they are
@@ -3337,13 +3338,13 @@ function rewriteTextureVFlip(src, samplerFlags)
 var RESERVED_IDENTIFIERS = (function ()
 {
 	var words = ('FALSE TRUE SamplerState Texture1D Texture1DArray Texture2D Texture2DArray Texture2DMS Texture2DMSArray Texture3D '
-		+ 'TextureCube TextureCubeArray asm asm_fragment auto cast catch char class column_major compile const_cast delete '
-		+ 'double dynamic_cast enum explicit extern external friend globallycoherent goto groupshared half inline linear long '
-		+ 'matrix mutable namespace new noinline nointerpolation noperspective operator packed packoffset pass point line precise '
-		+ 'private protected public register reinterpret_cast restrict row_major sample sampler sampler_state samplerRECT samplerRect '
-		+ 'shared short signed sizeof snorm static_cast storage storage1D storage2D storage3D string technique template texture '
-		+ 'texture1D texture2D texture3D textureCUBE textureRECT this try typedef union unorm unsigned using vector virtual volatile '
-		+ 'foreach interface samplerCUBE '
+		+ 'TextureCube TextureCubeArray asm_fragment auto catch char column_major compile const_cast delete '
+		+ 'dynamic_cast explicit friend globallycoherent groupshared linear '
+		+ 'matrix mutable new nointerpolation operator packed packoffset pass point line precise '
+		+ 'private protected register reinterpret_cast row_major sampler sampler_state samplerRECT samplerRect '
+		+ 'shared signed snorm static_cast storage storage1D storage2D storage3D string technique texture '
+		+ 'texture1D texture2D texture3D textureCUBE textureRECT try unorm vector virtual '
+		+ 'foreach samplerCUBE '
 		// reserved by HLSL itself rather than by ReShade's lexer; ReShade writes local names straight into the HLSL
 		// that the Direct3D compiler then reads, so these fail there even though ReShade's own parser accepts them
 		+ 'decl export triangle triangleadj lineadj cbuffer tbuffer NULL stateblock stateblock_state fxgroup technique10 technique11 '
@@ -3356,7 +3357,7 @@ var RESERVED_IDENTIFIERS = (function ()
 	// the HLSL half and min16 type families (half2, half3x3, min16float4 ...) and dword vectors
 	['half', 'dword', 'min16float', 'min16int', 'min16uint'].forEach(function (family)
 	{
-		map[family] = family + '_';
+		if (family !== 'half') { map[family] = family + '_'; } // half is reserved in GLSL ES itself
 		for (var n = 1; n <= 4; n++)
 		{
 			map[family + n] = family + n + '_';

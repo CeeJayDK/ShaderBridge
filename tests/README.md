@@ -6,7 +6,7 @@ Run with Node (no dependencies):
 
 | Suite | What it checks |
 |---|---|
-| `t_types.js` | the analyzer's type inference and scoping (64 cases) |
+| `t_types.js` | the analyzer's type inference and scoping (63 cases) |
 | `t_analyzer.js` | what each phase of the analysis adds (tokens, dead branches, macros, structs, signatures, scopes, lookup, expression walk) and that the phases need each other in order (68) |
 | `t_structs.js` | nested struct values, constructors, deep members, field names and comments, conditional declarations, and aliased out/inout updates (20) |
 | `t_porter_mat.js` | `rewriteInlineMatrixMul`, loaded exactly as it ships, including file-scope initialisers (33) |
@@ -18,7 +18,7 @@ Run with Node (no dependencies):
 | `t_texelfetch.js` | `texelFetch` / `textureSize`, and row-mirrored fetches from Vflip textures (20) |
 | `t_samplers.js` | sampler and texture names clashing across passes, macro aliases, hoisted initializers, unconnected helper inputs, and buffer mip chains (21) |
 | `t_common.js` | Common declarations are shared or renamed across passes as needed; arrays stay local to each pass; macro environments, channel resolutions, indentation, comment braces, and nested else-if blocks preserve each pass's meaning; only passes contributing to Image are selected (55) |
-| `t_glsl_compat.js` | output defaults and inout preservation, reserved words, `precision`, static globals, array and matrix constructors, conditional and symbolic array lengths, comparison functions, switch, macro typing, definition order and name collisions, rectangular matrix expressions, `inverse` / `outerProduct` / `matrixCompMult`, texture lookups, visual sample-rate declarations, `gl_FragCoord`, conditional fallback returns, file-scope detection, half-float unpacking, matrices resized from other matrices, 2x16 packing and inverse hyperbolic helpers, indexed writes inside macros, struct and array globals with calls or per-frame inputs in their initialisers, dynamic writes to vector components, and DX9 constant shifts and low-bit masks (394) |
+| `t_glsl_compat.js` | output defaults and inout preservation, reserved words, `precision`, static globals, array and matrix constructors, conditional and symbolic array lengths, comparison functions, switch, macro typing, definition order and name collisions, rectangular matrix expressions, `inverse` / `outerProduct` / `matrixCompMult`, texture lookups, visual sample-rate declarations, `gl_FragCoord`, conditional fallback returns, file-scope detection, half-float unpacking, matrices resized from other matrices, 2x16 packing and inverse hyperbolic helpers, indexed writes inside macros, struct and array globals with calls or per-frame inputs in their initialisers, dynamic writes to vector components, and DX9 constant shifts and low-bit masks (395) |
 | `t_functions.js` | ReShade FX has no forward declarations: declarations are removed and callers moved after the functions they call (21) |
 | `t_pipeline.js` | the transform is a list of named steps: the order that matters is declared and checked, and every step proves on its own example that it does something (146) |
 | `t_loops.js` | DX9 for-loop hints, large constant loops, nested and unbraced bodies, explicit attributes, function reordering, and specialized texture helpers reached from loops, and array-write unrolling (30) |
@@ -29,7 +29,7 @@ Run with Node (no dependencies):
 | `t_returns.js` | numeric fall-through returns, complete branches, loop exits, and preservation of existing returns (17) |
 | `t_contrast.js` | the page is readable: every text colour has enough contrast, and the critical styles agree with the stylesheet (70) |
 | `t_standalone.js` | the .fx includes nothing; author attribution precedes porter credits, metadata stays inside comments, frame duration uses seconds, and a shader named after a keyword still gets a valid technique name (23) |
-| `corpus/run.js` | 203 small GLSL idioms, each ported and compiled with the real ReShade compiler; synthetic DX9 loops and bit operations also check the instruction-slot budget on Windows |
+| `corpus/run.js` | 202 small GLSL idioms, each ported and compiled with the real ReShade compiler; synthetic DX9 loops and bit operations also check the instruction-slot budget on Windows |
 | `t_assembly_compile.js` | 49 complete synthetic effects, including nested structs with value copies and out/inout aliases, conditional array lengths and shared tables, buffer mipmaps, unconnected helper samplers, generated cubemap feedback, multipass macro isolation, resource aliases, hoisted texture reads, channel resolutions, and metadata; every entry point compiles for DX11; 45 also compile for DX9 on Windows (two dynamic array-write cases and two compute-volume cases require a modern API) |
 | `roundtrip.js` | the lexer must reproduce every shader source exactly |
 
@@ -45,7 +45,8 @@ Run with Node (no dependencies):
 ## The corpus
 
 Snippets use only what Shadertoy accepts: WebGL2, so GLSL ES 3.00. Functions from later versions
-(`bitCount`, `fma`, `packUnorm4x8`, `.length()` on vectors ...) are not supported, as Shadertoy rejects them too.
+(`bitCount`, `fma`, `packUnorm4x8`, `.length()` on vectors ...) and words GLSL ES reserves (`half`, `sample` ...)
+are not supported, as Shadertoy rejects them too. The code that handled them is kept in `archive/non-shadertoy-glsl`.
 
 `corpus/snippets.js` is the quickest way to find what the porter still gets wrong. Add an idiom, run
 `node corpus/run.js`, and the real compiler says whether the port compiles. Every fix in the 3.0.16 to 3.0.20 range

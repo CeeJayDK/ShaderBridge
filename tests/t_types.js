@@ -58,7 +58,6 @@ const cases = [
 	[ 'cross(q,q)', 'float3' ],
 	[ 'mix(q, q, 0.5)', 'float3' ],
 	[ 'max(q, 0.0)', 'float3' ],
-	[ 'max(0.0, q)', 'float3' ],
 	[ 'clamp(q,0.0,1.0)', 'float3' ],
 	[ 'smoothstep(0.0,1.0,q)', 'float3' ],
 	[ 'rot(x, 1.0)', 'float2' ],

@@ -45,12 +45,6 @@ function anBuiltinType(name, args)
 	{
 		if (name === 'step') { return t1; }
 		if (name === 'smoothstep') { return t2; }
-		if (name === 'clamp' || name === 'min' || name === 'max' || name === 'pow' || name === 'mod' || name === 'fmod' || name === 'atan2')
-		{
-			// scalar op vector → vector
-			var p0 = t0 && anParseType(t0), p1 = t1 && anParseType(t1);
-			if (p0 && p1 && p0.kind === 'scalar' && p1.kind === 'vec') { return t1; }
-		}
 		if (name === 'mix' || name === 'lerp') { return t0; }
 		return t0;
 	}

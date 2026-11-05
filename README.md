@@ -45,6 +45,13 @@ not establish each asset's terms or attribution. The generated texture ZIP is a
 local package pending confirmation of redistribution rights and credits; it is
 not currently a public release asset. The builder does not upload anything.
 
+## Scope
+
+ShaderBridge accepts what Shadertoy accepts: WebGL2's GLSL ES 3.00. Code that handled
+newer GLSL versions, or names GLSL ES reserves, is kept in
+[archive/non-shadertoy-glsl](archive/non-shadertoy-glsl/README.md) for a future port
+of other dialects; the converter does not load it.
+
 ## Validation
 
 See [tests/README.md](tests/README.md) for conversion and compiler checks.
