@@ -144,26 +144,26 @@ r = port('', 'vec2 value=vec2(0.);int i=0;float x=(value[i++]+=2.);fragColor=vec
 check('standalone component writes evaluate their index once', has(r,'(ST_component_add_float2(value, i++, 2.))'),r.out);
 
 // ── reserved identifiers (3.0.16)
-r = port('', 'float half = 0.5; fragColor = vec4(half);');
-check('half is renamed', has(r, 'float half_ = 0.5;') && has(r, 'float4(half_'), r.out);
+r = port('', 'float register = 0.5; fragColor = vec4(register);');
+check('register is renamed', has(r, 'float register_ = 0.5;') && has(r, 'float4(register_'), r.out);
 r = port('', 'vec3 matrix = vec3(2.); float vector = 1.; float string = 3.; fragColor = vec4(matrix * vector, string);');
 check('matrix / vector / string are renamed', has(r, 'matrix_') && has(r, 'vector_') && has(r, 'string_'));
-r = port('', 'float shared = 1.; float register = 2.; float interface = 3.; float inline = 4.; float precise = 5.; float fixed = 7.; fragColor = vec4(shared + register + inline + precise + fixed);');
-check('shared / register / inline / precise renamed', has(r, 'shared_') && has(r, 'register_') && has(r, 'inline_') && has(r, 'precise_'));
+r = port('', 'float shared = 1.; float register = 2.; float precise = 5.; fragColor = vec4(shared + register + precise);');
+check('shared / register / precise renamed', has(r, 'shared_') && has(r, 'register_') && has(r, 'precise_'));
 r = port('', 'float triangle = 1.; float sampler = 2.; float technique = 3.; float compile = 4.; fragColor = vec4(sampler + technique + compile);');
 check('sampler / technique / compile renamed', has(r, 'sampler_ ') && has(r, 'technique_') && has(r, 'compile_'));
 r = port('', 'float dword = 1.; float unorm = 2.; float snorm = 3.; fragColor = vec4(dword + unorm + snorm);');
 check('dword / unorm / snorm renamed', has(r, 'dword_') && has(r, 'unorm_') && has(r, 'snorm_'));
 r = port('', 'float decl = 4.; fragColor = vec4(decl);');
 check('decl is renamed for the Direct3D compiler', has(r, 'float decl_ = 4.;') && !/\bdecl\b/.test(r.out), r.out);
-r = port('', 'float point = 1.; float line = 2.; float linear = 3.; float sample = 4.; int pass = 5; fragColor = vec4(point + line + linear + sample + float(pass));');
-check('the original five still renamed', has(r, 'point_') && has(r, 'line_') && has(r, 'linear_') && has(r, 'sample_') && has(r, 'pass_'));
-r = port('float line(vec2 p) { return p.x; }\nfloat sample(vec2 p) { return p.y; }\n', 'fragColor = vec4(line(fragCoord), sample(fragCoord), 0., 1.);');
-check('functions named with reserved words: definition and calls', has(r, 'float line_(float2 p)') && has(r, 'line_(fragCoord)') && has(r, 'sample_(fragCoord)'));
-r = port('struct S { vec2 vector; float half; };\n', 'S s; s.vector = fragCoord; s.half = 1.; fragColor = vec4(s.vector, s.half, 1.);');
-check('struct fields renamed at declaration and use', has(r, 'float2 vector_;') && has(r, 's.vector_') && has(r, 's.half_'));
-r = port('#define half 0.5\n', 'fragColor = vec4(half);');
-check('macro names renamed in #define and uses', has(r, '#define half_ 0.5') && has(r, 'float4(half_'));
+r = port('', 'float point = 1.; float line = 2.; float linear = 3.; int pass = 5; fragColor = vec4(point + line + linear + float(pass));');
+check('the original names still renamed', has(r, 'point_') && has(r, 'line_') && has(r, 'linear_') && has(r, 'pass_'));
+r = port('float line(vec2 p) { return p.x; }\nfloat point(vec2 p) { return p.y; }\n', 'fragColor = vec4(line(fragCoord), point(fragCoord), 0., 1.);');
+check('functions named with reserved words: definition and calls', has(r, 'float line_(float2 p)') && has(r, 'line_(fragCoord)') && has(r, 'point_(fragCoord)'));
+r = port('struct S { vec2 vector; float linear; };\n', 'S s; s.vector = fragCoord; s.linear = 1.; fragColor = vec4(s.vector, s.linear, 1.);');
+check('struct fields renamed at declaration and use', has(r, 'float2 vector_;') && has(r, 's.vector_') && has(r, 's.linear_'));
+r = port('#define linear 0.5\n', 'fragColor = vec4(linear);');
+check('macro names renamed in #define and uses', has(r, '#define linear_ 0.5') && has(r, 'float4(linear_'));
 r = port('', 'vec4 t = texture(iChannel0, fragCoord);  fragColor = t;');
 check('texture() as a function call is untouched (it is converted to tex2D)', has(r, 'tex2D(iChannel0') && !has(r, 'texture_'));
 r = port('', 'vec4 t = texture2D(iChannel0, fragCoord);  fragColor = t;');
@@ -173,11 +173,12 @@ check('a variable named texture is renamed', has(r, 'float texture_ = 1.0;') || 
 check('HLSL type names are not touched by the rename', porter.renameReservedIdentifiers('float2 a; float3x3 m; int4 i; uint u; bool2 b; sampler2D s;', []) === 'float2 a; float3x3 m; int4 i; uint u; bool2 b; sampler2D s;');
 check('half and min16 families are renamed', porter.renameReservedIdentifiers('float half3 = 1.; float min16float4 = 2.;', []) === 'float half3_ = 1.; float min16float4_ = 2.;');
 check('directive names are never renamed', porter.renameReservedIdentifiers('#define X 1\n#ifdef X\n#endif\n#undef X\n#include "a.fxh"\n', []) === '#define X 1\n#ifdef X\n#endif\n#undef X\n#include "a.fxh"\n');
-check('a rename is reported', port('', 'float half = 1.; fragColor = vec4(half);').messages.some(m => /half → half_/.test(m.text)));
+check('a rename is reported', port('', 'float register = 1.; fragColor = vec4(register);').messages.some(m => /register → register_/.test(m.text)));
 check('identifiers merely containing a reserved word are untouched', porter.renameReservedIdentifiers('float halfway = 1.; float my_line = 2.; float pointer = 3.;', []) === 'float halfway = 1.; float my_line = 2.; float pointer = 3.;');
 
-r = port('', 'float interface = 1.; float foreach = 2.; float triangle = 3.; float export = 4.; float cbuffer = 5.; fragColor = vec4(interface + foreach + triangle + export + cbuffer);');
-check('interface / foreach / triangle / export / cbuffer renamed', ['interface_', 'foreach_', 'triangle_', 'export_', 'cbuffer_'].every(w => has(r, w)));
+r = port('', 'float foreach = 2.; float triangle = 3.; float export = 4.; float cbuffer = 5.; fragColor = vec4(foreach + triangle + export + cbuffer);');
+check('foreach / triangle / export / cbuffer renamed', ['foreach_', 'triangle_', 'export_', 'cbuffer_'].every(w => has(r, w)));
+check('words GLSL ES 3.00 reserves itself are not in the list (no Shadertoy shader can use them)', ['half', 'sample', 'extern', 'interface', 'inline', 'union'].every(w => porter.RESERVED_IDENTIFIERS[w] === undefined) && porter.RESERVED_IDENTIFIERS.shared === 'shared_' && porter.RESERVED_IDENTIFIERS.half2 === 'half2_');
 check('HLSL-only reserved words are covered (a local named triangle reaches the Direct3D compiler)', ['triangle', 'triangleadj', 'lineadj', 'NULL', 'Buffer', 'cbuffer'].every(w => porter.RESERVED_IDENTIFIERS[w] === w + '_'));
 
 // ── precision statements (3.0.16)
