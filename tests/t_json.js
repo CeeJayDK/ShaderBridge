@@ -1,5 +1,5 @@
-// Shadertoy JSON import: buffer passes are found by name in every export style, or by their fixed
-// output IDs, and sampler settings are read whether they are strings or booleans.
+// Shadertoy JSON import: an API response or an array is unwrapped, buffer passes are found by name in
+// every export style or by their fixed output IDs, and sampler settings are read as strings or booleans.
 const vm = require('vm');
 const fs = require('fs');
 const porter = require('./load_porter.js')();
@@ -23,5 +23,12 @@ const flipped = (vflip) => porter.resolveJsonInput({ type: 'texture', filepath: 
 check('vflip as a string', flipped('true') === true && flipped('false') === false);
 check('vflip as a boolean', flipped(true) === true && flipped(false) === false);
 
+const logs = [];
+porter.log = function (level, text) { logs.push(level + ': ' + text); };
+const inner = { info: { name: 'x' }, renderpass: [] };
+check('a shader as the Shadertoy API returns it', porter.unwrapShadertoyJson({ Shader: inner }) === inner);
+check('a plain export is unchanged', porter.unwrapShadertoyJson(inner) === inner);
+check('the first shader of an array, with a warning when there are more', porter.unwrapShadertoyJson([{ Shader: inner }, {}]) === inner && logs.length === 1 && /2 shaders/.test(logs[0]), JSON.stringify(logs));
+check('something else stays something else', porter.unwrapShadertoyJson(null) === null && porter.unwrapShadertoyJson([]) === undefined);
 console.log((total - bad) + '/' + total + ' json import tests OK');
 process.exit(bad ? 1 : 0);

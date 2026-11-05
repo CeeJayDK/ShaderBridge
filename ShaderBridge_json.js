@@ -358,6 +358,19 @@ function populateFromJson(data)
 	log('ok', 'JSON loaded: ' + passCount + ' pass(es). Review channel assignments then click Convert.');
 }
 
+// The Shadertoy API wraps a shader as { "Shader": { ... } }, and some exporters write an
+// array of shaders. Return the shader itself, the first one for an array.
+function unwrapShadertoyJson(data)
+{
+	if (Array.isArray(data))
+	{
+		if (data.length > 1) { log('warn', 'The file holds ' + data.length + ' shaders; only the first is loaded.'); }
+		data = data[0];
+	}
+	if (data && data.Shader && typeof data.Shader === 'object') { data = data.Shader; }
+	return data;
+}
+
 function loadJsonFile(text, filename)
 {
 	var data;
@@ -368,7 +381,8 @@ function loadJsonFile(text, filename)
 		return;
 	}
 
-	if (!data.renderpass || !Array.isArray(data.renderpass))
+	data = unwrapShadertoyJson(data);
+	if (!data || !data.renderpass || !Array.isArray(data.renderpass))
 	{
 		log('error', '"' + filename + '" does not look like a Shadertoy export — missing renderpass array.');
 		return;
