@@ -26,6 +26,10 @@ check('bit-counting helpers return int for int and uint arguments', has(bitPort,
 check('bitfieldReverse keeps the argument type', has(bitPort, 'uint3 bitfieldReverse(uint3 x)') && has(bitPort, 'int bitfieldReverse(int x)'), bitPort.out);
 check('fma and the fine and coarse derivatives are renamed', has(bitPort, 'mad(1., 2., 3.)') && has(bitPort, 'ddx_fine(fragCoord.x)') && has(bitPort, 'ddy_coarse(fragCoord.y)'), bitPort.out);
 check('a shader that defines bitCount itself keeps it', porter.injectGlslHelpers('float bitCount(int x){return 1.;}\nfloat y=bitCount(2);') === 'float bitCount(int x){return 1.;}\nfloat y=bitCount(2);');
+const fields = porter.injectGlslHelpers('int a = bitfieldExtract(x, 1, 2); uint b = bitfieldInsert(u, v, 3, 4); uint c = uaddCarry(u, v, k);');
+check('bitfieldExtract has int and uint overloads that shift the field to the top and back', fields.includes('int bitfieldExtract(int value, int offset, int bits)') && fields.includes('uint4 bitfieldExtract(uint4 value, int offset, int bits)') && fields.includes('return (value << uint(32 - offset - bits)) >> uint(32 - bits);') && fields.includes('return (int2)0;'), fields);
+check('bitfieldInsert masks the field, and the int overload goes through uint', fields.includes('uint3 bitfieldInsert(uint3 base, uint3 insert, int offset, int bits)') && fields.includes('return int2(bitfieldInsert(uint2(base), uint2(insert), offset, bits));') && fields.includes('bits >= 32 ? 0xFFFFFFFFu'), fields);
+check('uaddCarry returns the sum and writes the carry', fields.includes('uint2 uaddCarry(uint2 x, uint2 y, out uint2 carry)') && fields.includes('carry = uint2(sum < x);'), fields);
 const hyperbolic = porter.injectGlslHelpers('float a = acosh(2.); float3 b = atanh(float3(.5));');
 check('acosh and atanh have scalar and vector overloads', [1, 2, 3, 4].every(n => hyperbolic.includes((n === 1 ? 'float' : 'float' + n) + ' acosh(') && hyperbolic.includes((n === 1 ? 'float' : 'float' + n) + ' atanh(')), hyperbolic);
 const packing = porter.injectGlslHelpers('uint a = packUnorm4x8(v); float2 b = unpackSnorm2x16(a); uint c = packHalf2x16(b);');
@@ -240,6 +244,15 @@ r = port('', 'mat4 m4 = mat4(1.0); mat3 n = mat3(m4); mat4 b = mat4(n); fragColo
 check('through the whole pipeline: matrices resized both ways', has(r, 'float3x3(m4[0].xyz, m4[1].xyz, m4[2].xyz)') && has(r, 'float4x4(float4(n[0], 0.0), float4(n[1], 0.0), float4(n[2], 0.0), float4(0.0, 0.0, 0.0, 1.0))'), r.out);
 r = port('', 'mat3 m = mat3(1.0); vec3 p = m * vec3(fragCoord, 1.); fragColor = vec4(p, 1.);');
 check('through the whole pipeline: identity, then the matrix multiply', has(r, 'float3x3(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)') && has(r, 'mul('), r.out);
+
+// ── length() of vectors and matrices (3.5.13)
+r = port('float count(vec3 q){return float(q.length());}\n', 'vec4 v = vec4(1.); mat3x2 m = mat3x2(1.); float a[2]; fragColor = vec4(float(v.length()), float(m.length()), float(a.length()), count(v.xyz));');
+check('a vector has as many as its components, a matrix as its columns', has(r, 'float(4), float(3), float(2)') && has(r, 'return float(3);'), r.out);
+check('a name declared with different sizes is left for review', porter.rewriteArrayLength('float f(float2 v){return float(v.length());}\nfloat g(float3 v){return float(v.length());}\n', []).includes('v.length()'));
+
+// ── macros that write through an index are expanded for the component-write rewrite (3.5.13)
+r = port('', 'vec4 O = vec4(fragCoord, 1., 4.);\n#define STEP O[ int(O.w)%3 ] += sign(O.w-2.5)\nfor(int i=0;i<4;i++){ STEP; STEP*-1.; }\nfragColor = O;');
+check('a dynamic vector write hidden in a macro uses the component helper', has(r, 'ST_component_add_float4(O, int(O.w)%3, sign(O.w-2.5));') && has(r, 'ST_component_add_float4(O, int(O.w)%3, sign(O.w-2.5)*-1.);'), r.out);
 
 // ── comparison functions and renamed built-ins (3.0.18)
 const gb = porter.rewriteGlslBuiltins;
@@ -647,9 +660,9 @@ const lmsgs = [];
 const same2 = porter.rewriteArrayLength('void f() { float a[2]; }\nvoid g() { float a[3]; int n = a.length(); }\n', lmsgs);
 check('the same name with different sizes is left and reported', same2.indexOf('a.length()') >= 0 && lmsgs.some(m => m.level === 'warn' && /could not be replaced/.test(m.text)), JSON.stringify(lmsgs));
 const vmsgs = [];
-check('a vector has no array to read, so it is left and reported', porter.rewriteArrayLength('float3 v;\nint n = v.length();\n', vmsgs).indexOf('v.length()') >= 0 && vmsgs.some(m => m.level === 'warn'), JSON.stringify(vmsgs));
+check('a vector has as many as its components, and nothing is left to report', porter.rewriteArrayLength('float3 v;\nint n = v.length();\n', vmsgs) === 'float3 v;\nint n = 3;\n' && !vmsgs.some(m => m.level === 'warn'), JSON.stringify(vmsgs));
 check('without length() the text comes back as it was', al('float a[3];\nint n = 3;\n') === 'float a[3];\nint n = 3;\n');
-check('the number of calls replaced is reported', (function () { const mm = []; porter.rewriteArrayLength('float a[2];\nint n = a.length() + a.length();\n', mm); return mm.length === 1 && /2 array length/.test(mm[0].text); }()));
+check('the number of calls replaced is reported', (function () { const mm = []; porter.rewriteArrayLength('float a[2];\nint n = a.length() + a.length();\n', mm); return mm.length === 1 && /^2 length\(\) call/.test(mm[0].text); }()));
 r = port('const float steps[] = float[](0.9, 0.25, 0.5);\n', 'float s = 0.; for (int i = 0; i < steps.length(); i++) { s += steps[i]; } fragColor = vec4(s);');
 check('through the pipeline: the GLSL array constructor is counted', has(r, 'i < 3;'), r.out);
 

@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.5.12';
+var PORTER_VERSION = '3.5.13';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -817,9 +817,13 @@ function stepCompatibilityMacros(ctx)
 		if (/\bmainImage\s*\(/.test(macro.body)) { return true; }
 		if (/[{};]/.test(macro.body)) { return true; }
 		var bodyTokens = tokenizeSource(macro.body).filter(function (t) { return t.type !== 'ws'; });
+		var indexes = bodyTokens.some(function (t) { return t.text === '['; });
 		return bodyTokens.some(function (t, i)
 		{
 			if (t.text === '^^') { return true; }
+			// a write through an index, which may be a dynamic vector component (O[k] += 1.)
+			if (t.text === ']' && bodyTokens[i + 1] && /^(?:[-+*\/]?=|\+\+|--)$/.test(bodyTokens[i + 1].text)) { return true; }
+			if (indexes && (t.text === '++' || t.text === '--')) { return true; }
 			var constructorOrLookup = /^(?:(?:float|int|uint|bool)[234]|texture\w*|texelFetch\w*|tex[23]D\w*|texCUBE\w*)$/.test(t.text);
 			var rectangular = /^float([234])x([234])$/.exec(t.text);
 			return t.type === 'ident' && (((constructorOrLookup || (rectangular && rectangular[1] !== rectangular[2])) && bodyTokens[i + 1] && bodyTokens[i + 1].text === '(') || needsExpansion(t.text, seen.concat(name)));
@@ -3833,6 +3837,43 @@ function injectGlslHelpers(src)
 		unpackSnorm4x8: 'float4 unpackSnorm4x8(uint p)\n{\n\treturn clamp(float4(int4(uint4(p << 24, p << 16, p << 8, p)) >> 24) / 127.0, -1.0, 1.0);\n}\n\n'
 	};
 	Object.keys(packing).forEach(function (name) { if (needs(name)) { helpers += packing[name]; } });
+	// bitfieldExtract sign-extends the field for int and zero-extends it for uint: shift the field
+	// to the top, then back down (arithmetic for int). A field of 0 bits gives 0, which the shifts
+	// cannot express (a shift by 32 is undefined).
+	if (needs('bitfieldExtract'))
+	{
+		helpers += sizes(function (n)
+		{
+			return ['int', 'uint'].map(function (base)
+			{
+				var type = base + n;
+				return type + ' bitfieldExtract(' + type + ' value, int offset, int bits)\n{\n\tif (bits <= 0)\n\t{\n\t\treturn (' + type + ')0;\n\t}\n'
+					+ '\treturn (value << uint(32 - offset - bits)) >> uint(32 - bits);\n}\n\n';
+			}).join('');
+		});
+	}
+	// bitfieldInsert replaces bits [offset, offset + bits) of base with the low bits of insert.
+	if (needs('bitfieldInsert'))
+	{
+		helpers += sizes(function (n)
+		{
+			var u = 'uint' + n, i = 'int' + n;
+			return u + ' bitfieldInsert(' + u + ' base, ' + u + ' insert, int offset, int bits)\n{\n'
+				+ '\tuint mask = (bits >= 32 ? 0xFFFFFFFFu : ((1u << uint(bits)) - 1u)) << uint(offset);\n'
+				+ '\treturn (base & ~mask) | ((insert << uint(offset)) & mask);\n}\n\n'
+				+ i + ' bitfieldInsert(' + i + ' base, ' + i + ' insert, int offset, int bits)\n{\n'
+				+ '\treturn ' + i + '(bitfieldInsert(' + u + '(base), ' + u + '(insert), offset, bits));\n}\n\n';
+		});
+	}
+	// uaddCarry returns the 32-bit sum and sets carry to 1 where the addition wrapped around.
+	if (needs('uaddCarry'))
+	{
+		helpers += sizes(function (n)
+		{
+			var u = 'uint' + n;
+			return u + ' uaddCarry(' + u + ' x, ' + u + ' y, out ' + u + ' carry)\n{\n\t' + u + ' sum = x + y;\n\tcarry = ' + u + '(sum < x);\n\treturn sum;\n}\n\n';
+		});
+	}
 	['inverse', 'outerProduct', 'matrixCompMult'].forEach(function (name)
 	{
 		if (!new RegExp('\\b' + name + '\\s*\\(').test(src)) { return; }
@@ -4258,6 +4299,21 @@ function rewriteArrayLength(src, messages)
 	src.replace(lengthPattern, function (match, before, name)
 	{
 		var sizes = sizesOf(name);
+		if (sizes.length === 0)
+		{
+			// GLSL also gives vectors (components) and matrices (columns) a length(). A GLSL
+			// matrix column is a stored row, so both are the first dimension of the HLSL type.
+			if (!arrayDecls) { arrayDecls = analyzeSource(src).decls; }
+			var counts = arrayDecls.filter(function (d) { return d.name === name; }).map(function (d)
+			{
+				var parsed = anParseType(d.type);
+				return parsed && parsed.kind !== 'scalar' ? parsed.rows : null;
+			});
+			if (counts.length && counts.every(function (c) { return c !== null && c === counts[0]; }))
+			{
+				replaced++; replacements[name] = String(counts[0]); return match;
+			}
+		}
 		var distinct = sizes.filter(function (v, i) { return sizes.indexOf(v) === i; });
 		if (distinct.length === 1 && distinct[0] !== null) { replaced++; replacements[name] = /^\d+$/.test(String(distinct[0])) ? String(distinct[0]) : '(' + distinct[0] + ')'; return match; }
 		if (distinct.length > 1 && distinct.indexOf(null) < 0)
@@ -4287,7 +4343,7 @@ function rewriteArrayLength(src, messages)
 
 	if (messages && replaced > 0)
 	{
-		messages.push({ level: 'info', text: replaced + ' array length() call(s) replaced with the size of the array.' });
+		messages.push({ level: 'info', text: replaced + ' length() call(s) replaced with the size of the array, vector or matrix.' });
 	}
 	var names = Object.keys(unresolved);
 	if (messages && names.length > 0)
