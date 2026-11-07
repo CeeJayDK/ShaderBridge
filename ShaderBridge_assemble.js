@@ -40,6 +40,11 @@ function selectImageDependencies(passes)
 	return passes.filter(function (p) { return needed[p.id]; });
 }
 
+// The Shadertoy inputs declared below (and iChannelTime, per pass) as uniforms or as values set in the
+// entry point, never as literals. A global initialiser that reads one must therefore run in the
+// entry point; stepHoistGlobalInits uses this list. iResolution and iSampleRate are static consts.
+var ST_RUNTIME_INPUTS = ['iTime', 'iTimeDelta', 'iFrame', 'iFrameRate', 'iMouse', 'iDate', 'iChannelTime'];
+
 function buildUniformBlock(usedUniforms) {
 	var lines = [];
 

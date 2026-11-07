@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.5.15';
+var PORTER_VERSION = '3.5.16';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -1503,40 +1503,32 @@ function stepHoistGlobalInits(ctx)
 	// Struct values (S s = S_ctor(...)) and one-dimensional arrays ({a, f(b)}) are hoisted the same
 	// way; an array is assigned element by element, since HLSL has no array assignment from a list.
 	var globalInits = [];
-	// Shadertoy's per-frame inputs are uniforms or values set in the entry point, never literals.
+	// The per-frame inputs are never literals (ST_RUNTIME_INPUTS, beside the assembler's uniform block).
 	// WebGL (ANGLE) accepts them in a global initialiser, e.g.  vec2 drift = vec2(iTime);
-	var hoisted = ['iTime', 'iTimeDelta', 'iFrame', 'iFrameRate', 'iMouse', 'iDate', 'iChannelTime'];
+	var hoisted = ST_RUNTIME_INPUTS.slice();
+	var hoistedRe = null;
+	function usesHoisted(init)
+	{
+		if (!hoistedRe) { hoistedRe = new RegExp('(?<![\\w.])(?:' + hoisted.join('|') + ')(?!\\w)'); }
+		return hoistedRe.test(init);
+	}
 	var globals = fileScopeTokenOffsets(s);
 	var callRe = /\b(?!(?:float[234]?(?:x[234])?|int[234]?|uint[234]?|bool)\b)[A-Za-z_]\w*\s*\(/;
-	function topLevelItems(list)
-	{
-		var items = [];
-		var depth = 0;
-		var start = 0;
-		for (var i = 0; i < list.length; i++)
-		{
-			var c = list[i];
-			if (c === '(' || c === '[') { depth++; }
-			else if (c === ')' || c === ']') { depth--; }
-			else if (c === ',' && depth === 0) { items.push(list.slice(start, i)); start = i + 1; }
-		}
-		items.push(list.slice(start));
-		return items.map(function (item) { return item.replace(/\s+/g, ' ').trim(); });
-	}
 	s = s.replace(/^static[ ]+(const[ ]+)?([A-Za-z_]\w*)[ ]+(\w+)[ ]*(\[[^\[\]\n]*\])?[ ]*=[ ]*(\{[^;{}«]*\}|[^;{«]*?)[ ]*;/gm,
 		function (match, isConst, type, name, dims, init, offset) {
 			if (!globals[offset]) { return match; }
 			var isList = init[0] === '{';
 			if (!dims !== !isList) { return match; }
-			var usesHoisted = hoisted.some(function (h) { return new RegExp('(?<![\\w.])' + h + '(?!\\w)').test(init); });
-			if (!callRe.test(init) && !usesHoisted) { return match; }
+			if (!callRe.test(init) && !usesHoisted(init)) { return match; }
 			hoisted.push(name);
+			hoistedRe = null;
 			if (isList)
 			{
-				topLevelItems(init.slice(1, -1)).forEach(function (item, i)
-				{
-					if (item) { globalInits.push(name + '[' + i + '] = ' + item + ';'); }
-				});
+				// the top-level elements of the list; a declaration without a size takes their count
+				var parsed = splitCallArgs('(' + init.slice(1, -1) + ')', 0);
+				var items = (parsed ? [parsed.samp].concat(parsed.args) : [init.slice(1, -1).trim()]).filter(function (item) { return item; });
+				items.forEach(function (item, i) { globalInits.push(name + '[' + i + '] = ' + item.replace(/\s+/g, ' ') + ';'); });
+				if (/^\[\s*\]$/.test(dims)) { dims = '[' + items.length + ']'; }
 			}
 			else { globalInits.push(name + ' = ' + init.replace(/\s+/g, ' ').trim() + ';'); }
 			return 'static ' + type + ' ' + name + (dims || '') + ';';
@@ -3461,7 +3453,6 @@ function rewriteArrayConstructors(src, structNames)
 function matrixFromMatrixConstructor(name, target, source, text)
 {
 	var swizzle = 'xyzw';
-	var operand = /^[\w.]+(?:\[[^\[\]]*\])*$/.test(text) ? text : '(' + text + ')';
 	var rows = [];
 	for (var row = 0; row < target.rows; row++)
 	{
@@ -3470,7 +3461,7 @@ function matrixFromMatrixConstructor(name, target, source, text)
 		if (row < source.rows)
 		{
 			taken = Math.min(target.cols, source.cols);
-			parts.push(operand + '[' + row + ']' + (taken === source.cols ? '' : '.' + swizzle.slice(0, taken)));
+			parts.push(text + '[' + row + ']' + (taken === source.cols ? '' : '.' + swizzle.slice(0, taken)));
 		}
 		for (var col = taken; col < target.cols; col++) { parts.push(row === col ? '1.0' : '0.0'); }
 		rows.push(parts.length === 1 && taken === target.cols ? parts[0] : 'float' + target.cols + '(' + parts.join(', ') + ')');
@@ -3480,6 +3471,8 @@ function matrixFromMatrixConstructor(name, target, source, text)
 
 function rewriteDiagonalMatrices(src, messages)
 {
+	// A matrix argument that is not a plain variable is passed to a helper, so it is evaluated once.
+	var resizeHelpers = {};
 	var result = rewriteExpressions(src, function (node, render)
 	{
 		if (node.kind !== 'call' || node.args.length !== 1) { return null; }
@@ -3488,7 +3481,11 @@ function rewriteDiagonalMatrices(src, messages)
 		var argType = node.args[0].type && anParseType(node.args[0].type);
 		if (argType && argType.kind === 'mat' && (argType.rows !== target.rows || argType.cols !== target.cols))
 		{
-			return matrixFromMatrixConstructor(node.name, target, argType, render(node.args[0]));
+			var text = render(node.args[0]);
+			if (/^[\w.]+(?:\[[^\[\]]*\])*$/.test(text)) { return matrixFromMatrixConstructor(node.name, target, argType, text); }
+			var helper = 'ST_' + node.name + '_from_' + node.args[0].type;
+			resizeHelpers[helper] = node.name + ' ' + helper + '(' + node.args[0].type + ' m)\n{\n\treturn ' + matrixFromMatrixConstructor(node.name, target, argType, 'm') + ';\n}\n';
+			return helper + '(' + text + ')';
 		}
 		if (!argType || argType.kind !== 'scalar') { return null; }
 
@@ -3505,7 +3502,8 @@ function rewriteDiagonalMatrices(src, messages)
 	{
 		messages.push({ level: 'warn', text: result.parseFailures + ' expression(s) could not be analysed for diagonal matrix constructors; check any matrix built from a single scalar by hand.' });
 	}
-	return result.src;
+	var declarations = Object.keys(resizeHelpers).map(function (name) { return resizeHelpers[name]; }).join('\n');
+	return declarations ? declarations + '\n' + result.src : result.src;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3770,7 +3768,15 @@ function glslHelperSource(name, n)
 function injectGlslHelpers(src)
 {
 	var helpers = '';
-	if (/\basinh\s*\(/.test(src) && !/\bfloat[234]?\s+asinh\s*\([^)]*\)\s*\{/.test(src))
+	function definesFunction(name)
+	{
+		return new RegExp('\\b\\w+\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{').test(src);
+	}
+	function needs(name)
+	{
+		return new RegExp('\\b' + name + '\\s*\\(').test(src) && !definesFunction(name);
+	}
+	if (needs('asinh'))
 	{
 		// Use the magnitude to avoid cancellation for negative inputs. The small
 		// and large branches avoid rounding away tiny values and squaring overflow.
@@ -3784,17 +3790,9 @@ function injectGlslHelpers(src)
 	}
 	// GLSL stores x in the low half and y in the high half. A helper evaluates
 	// the argument once, including when the caller supplies a stateful expression.
-	if (/\bunpackHalf2x16\s*\(/.test(src) && !/\bfloat2\s+unpackHalf2x16\s*\([^)]*\)\s*\{/.test(src))
+	if (needs('unpackHalf2x16'))
 	{
 		helpers += 'float2 unpackHalf2x16(uint bits)\n{\n\treturn f16tof32(uint2(bits, bits >> 16));\n}\n\n';
-	}
-	function definesFunction(name)
-	{
-		return new RegExp('\\b\\w+\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{').test(src);
-	}
-	function needs(name)
-	{
-		return new RegExp('\\b' + name + '\\s*\\(').test(src) && !definesFunction(name);
 	}
 	function sizes(make)
 	{
@@ -3820,8 +3818,7 @@ function injectGlslHelpers(src)
 	Object.keys(packing).forEach(function (name) { if (needs(name)) { helpers += packing[name]; } });
 	['inverse', 'outerProduct', 'matrixCompMult'].forEach(function (name)
 	{
-		if (!new RegExp('\\b' + name + '\\s*\\(').test(src)) { return; }
-		if (new RegExp('\\b(?:float\\d?(?:x\\d)?|void)\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{').test(src)) { return; }
+		if (!needs(name)) { return; }
 		[2, 3, 4].forEach(function (n)
 		{
 			if (new RegExp('\\bfloat' + n + 'x' + n + '\\b').test(src) || (name === 'outerProduct' && new RegExp('\\bfloat' + n + '\\b').test(src))) { helpers += glslHelperSource(name, n); }

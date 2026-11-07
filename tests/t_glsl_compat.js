@@ -230,7 +230,8 @@ check('four scalars are left alone', dm('float2x2 m = float2x2(s, s, s, s);') ==
 check('a matrix built from vectors is left alone', dm('float2x2 m = float2x2(float2(s, s), float2(s, s));') === 'float2x2 m = float2x2(float2(s, s), float2(s, s));');
 check('a smaller matrix from a larger one keeps the upper-left rows', porter.rewriteDiagonalMatrices('float4 f(float4x4 b)\n{\n\tfloat3x3 n = float3x3(b);\n\treturn n[0].xyzz;\n}\n', []).includes('float3x3(b[0].xyz, b[1].xyz, b[2].xyz)'));
 check('a larger matrix from a smaller one is completed with the identity', porter.rewriteDiagonalMatrices('float4 f(float2x2 b)\n{\n\tfloat3x3 n = float3x3(b);\n\treturn n[0].xyzz;\n}\n', []).includes('float3x3(float3(b[0], 0.0), float3(b[1], 0.0), float3(0.0, 0.0, 1.0))'));
-check('an expression is parenthesised before its rows are taken', porter.rewriteDiagonalMatrices('float4 f(float4x4 a, float4x4 b)\n{\n\tfloat2x2 n = float2x2(mul(a, b));\n\treturn n[0].xyxy;\n}\n', []).includes('float2x2((mul(a, b))[0].xy, (mul(a, b))[1].xy)'));
+const resized = porter.rewriteDiagonalMatrices('float4 f(float4x4 a, float4x4 b)\n{\n\tfloat2x2 n = float2x2(mul(a, b));\n\tfloat2x2 k = float2x2(mul(b, a));\n\treturn n[0].xyxy;\n}\n', []);
+check('an expression goes through a helper, so it is evaluated once', resized.includes('float2x2 n = ST_float2x2_from_float4x4(mul(a, b));') && resized.includes('float2x2 ST_float2x2_from_float4x4(float4x4 m)\n{\n\treturn float2x2(m[0].xy, m[1].xy);\n}') && (resized.match(/float2x2 ST_float2x2_from_float4x4\(/g) || []).length === 1, resized);
 check('a matrix of the same size is left alone', porter.rewriteDiagonalMatrices('float4 f(float3x3 b)\n{\n\tfloat3x3 n = float3x3(b);\n\treturn n[0].xyzz;\n}\n', []).includes('float3x3 n = float3x3(b);'));
 r = port('', 'mat4 m4 = mat4(1.0); mat3 n = mat3(m4); mat4 b = mat4(n); fragColor = vec4(n[0], b[3].w);');
 check('through the whole pipeline: matrices resized both ways', has(r, 'float3x3(m4[0].xyz, m4[1].xyz, m4[2].xyz)') && has(r, 'float4x4(float4(n[0], 0.0), float4(n[1], 0.0), float4(n[2], 0.0), float4(0.0, 0.0, 0.0, 1.0))'), r.out);
@@ -583,6 +584,10 @@ check('an array of literals keeps its initialiser', /static const float plain\[2
 hz = hoist('vec2 drift = vec2(iTime);\nvec2 cursor = iMouse.xy;\nfloat later = drift.x * 2.0;\nfloat scale = iResolution.x * 0.001;\n');
 check('an initialiser that reads a per-frame input is hoisted, as is one built from it', same(hz.globalInits, ['drift = float2(iTime, iTime);', 'cursor = iMouse.xy;', 'later = drift.x * 2.0;']) && /static float2 drift;/.test(hz.src), JSON.stringify(hz.globalInits) + hz.src);
 check('the resolution is a literal, so its initialiser stays', /static float scale = iResolution\.x \* 0\.001;/.test(hz.src), hz.src);
+
+hz = hoist('const float unsized[] = float[](sin(1.), 2., 3.);\n');
+check('an array declared without a size takes the number of its elements', /static float unsized\[3\];/.test(hz.src) && same(hz.globalInits, ['unsized[0] = sin(1.);', 'unsized[1] = 2.;', 'unsized[2] = 3.;']), JSON.stringify(hz.globalInits) + hz.src);
+check('the per-frame inputs come from the assembler', porter.ST_RUNTIME_INPUTS.indexOf('iTime') >= 0 && porter.ST_RUNTIME_INPUTS.indexOf('iResolution') < 0);
 
 // ── several variables in one global declaration (3.0.33)
 const bits = porter.transformGLSL('void mainImage(out vec4 c, vec2 p) { int k = int(p.x); c = vec4(float((k >> 1) & 1)); }', [], 'Image').src;
