@@ -185,6 +185,7 @@ module.exports = [
 	['macro_nested_scalar_broadcast', '#define PI 3.141592654\n#define TAU (2.0*PI)\n', 'fragColor = vec4(TAU * 0.1);'],
 	// ── a global that depends on a global that had to be hoisted
 	['global_init_frame_inputs', 'vec2 drift = vec2(iTime) * .1;\nvec2 cursor = iMouse.xy;\nfloat beat = float(iFrame % 60) + drift.x;\nfloat scale = iResolution.x * .001;\n', 'fragColor = vec4(drift + cursor * scale, beat, 1.);'],
+	['global_unsized_array_call', 'const float waves[] = float[](sin(1.), 2.);\nconst mat4 basis = mat4(1.);\nfloat count;\nmat4 next(){count += 1.; return basis;}\n', 'count = 0.; mat3 m = mat3(next() * basis); fragColor = vec4(waves[0] + waves[1] + float(waves.length()), m[0].x, count, 1.);'],
 	['global_init_chain', 'const float base = sin(1.0);\nfloat scaled = base * 2.0;\nvec2 pair = vec2(scaled, base);\n', 'fragColor = vec4(pair, scaled, 1.);'],
 	['global_init_matrix_chain', '#define ROT(a) mat2(cos(a), sin(a), -sin(a), cos(a))\nconst mat2 rot0 = ROT(0.0);\nmat2 g_rot0 = rot0;\nmat2 g_rot1 = rot0;\n', 'vec2 p = fragCoord * g_rot0; p *= g_rot1; fragColor = vec4(p, 0., 1.);'],
 	// ── several variables in one global declaration, in the style with the commas first

@@ -362,11 +362,7 @@ function populateFromJson(data)
 // array of shaders. Return the shader itself, the first one for an array.
 function unwrapShadertoyJson(data)
 {
-	if (Array.isArray(data))
-	{
-		if (data.length > 1) { log('warn', 'The file holds ' + data.length + ' shaders; only the first is loaded.'); }
-		data = data[0];
-	}
+	if (Array.isArray(data)) { data = data[0]; }
 	if (data && data.Shader && typeof data.Shader === 'object') { data = data.Shader; }
 	return data;
 }
@@ -381,6 +377,7 @@ function loadJsonFile(text, filename)
 		return;
 	}
 
+	var shaderCount = Array.isArray(data) ? data.length : 1;
 	data = unwrapShadertoyJson(data);
 	if (!data || !data.renderpass || !Array.isArray(data.renderpass))
 	{
@@ -389,4 +386,6 @@ function loadJsonFile(text, filename)
 	}
 
 	populateFromJson(data);
+	// after populateFromJson, which starts a new log
+	if (shaderCount > 1) { log('warn', 'The file holds ' + shaderCount + ' shaders; only the first is loaded.'); }
 }
