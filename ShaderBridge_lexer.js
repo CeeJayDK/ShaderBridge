@@ -88,6 +88,17 @@ function tokenizeSource(src)
 				if (pc === 92 && src.charCodeAt(i + 1) === 10) { i += 2; continue; }
 				if (pc === 92 && src.charCodeAt(i + 1) === 13 && src.charCodeAt(i + 2) === 10) { i += 3; continue; }
 				if (pc === 10) { break; }
+				if (pc === 47 && src.charCodeAt(i + 1) === 47)
+				{
+					// a line comment ends the directive; a /* inside it opens nothing
+					while (i < n && src.charCodeAt(i) !== 10)
+					{
+						if (src.charCodeAt(i) === 92 && src.charCodeAt(i + 1) === 10) { i += 2; continue; }
+						if (src.charCodeAt(i) === 92 && src.charCodeAt(i + 1) === 13 && src.charCodeAt(i + 2) === 10) { i += 3; continue; }
+						i++;
+					}
+					break;
+				}
 				if (pc === 47 && src.charCodeAt(i + 1) === 42)
 				{
 					i += 2;

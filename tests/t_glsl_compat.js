@@ -104,9 +104,9 @@ const cubeOutCtx={src:'void mainCubemap(out float4 color,float2 p,float3 o,float
 check('cubemap helpers initialize their output too',/color = \(float4\)0;/.test(cubeOutCtx.src));
 
 const customSaturate=port('float saturate(float x){return clamp(x*.25,0.0,1.0);}\n','vec3 v=vec3(-1.,.5,2.);fragColor=vec4(clamp(v,0.0,1.0),saturate(2.));');
-check('clamp inside a saturate helper does not become recursive',has(customSaturate,'clamp(x*.25,0.0,1.0)') && !has(customSaturate,'return saturate('),customSaturate.out);
-check('vector clamps keep their intrinsic overload with a scalar saturate helper',has(customSaturate,'clamp(v,0.0,1.0)'),customSaturate.out);
-check('explicit calls to a custom saturate helper remain intact',has(customSaturate,'saturate(2.)'),customSaturate.out);
+check('a saturate helper of the shader gets its own name, so the clamp inside it cannot call it',has(customSaturate,'float saturate_(float x){return saturate(x*.25);}'),customSaturate.out);
+check('vector clamps use the intrinsic, not the scalar helper',has(customSaturate,'saturate(v)'),customSaturate.out);
+check('explicit calls to a custom saturate helper go to the helper',has(customSaturate,'saturate_(2.)'),customSaturate.out);
 
 let r = port('', 'fragColor=vec4(unpackHalf2x16(0xc0003c00u),0.,1.);');
 check('packed half floats use the low and high halves in order', has(r, 'return f16tof32(uint2(bits, ST_shiftRight_uint(bits, 16)));'), r.out);
@@ -761,6 +761,63 @@ porter.expandLiteralConstructorsInMacros('#define A float3(0)\n#define B float2(
 check('the number written out is reported', mcm.length === 1 && /2 scalar constructor/.test(mcm[0].text), JSON.stringify(mcm));
 r = port('#define ZERO vec3(0)\n#define HALF vec2(.5)\n#define ONE4(x) (vec4(1.0) * (x))\n', 'vec3 a = ZERO + vec3(fragCoord, 1.); fragColor = ONE4(vec4(a, 1.)) + vec4(HALF, 0., 0.);');
 check('through the pipeline: macros with a literal constructor', has(r, '#define ZERO float3(0, 0, 0)') && has(r, '#define HALF float2(.5, .5)') && has(r, 'float4(1.0, 1.0, 1.0, 1.0)'), r.out);
+
+// ── found by the 3.5.17 review ──
+r = port('', 'float x=fragCoord.x;float y=clamp(pow(clamp(x, 0.0, 1.0), 2.0), 0.0, 1.0);float z=clamp(1.0 - clamp(x, 0.0, 1.0), 0.0, 1.0);float w=clamp(x, 0.5, clamp(x, 0, 1));fragColor=vec4(y,z,w,1.);');
+check('a clamp inside the first argument of a clamp is rewritten as a call of its own', has(r, 'saturate(pow(saturate(x), 2.0))') && has(r, 'saturate(1.0 - saturate(x))') && has(r, 'clamp(x, 0.5, saturate(x))'), r.out);
+r = port('#extension GL_OES_standard_derivatives : enable\n', 'fragColor=vec4(fwidth(fragCoord.x));');
+check('#extension lines are removed', !has(r, 'extension'), r.out);
+r = port('#define lerp mix\n#define tex2D texture\n#define atan2 atan\n', 'fragColor=tex2D(iChannel0,fragCoord)*lerp(0.,1.,atan2(fragCoord.y,fragCoord.x));');
+check('a macro that only renames a rewritten built-in is replaced by the built-in', !has(r, '#define') && has(r, 'tex2D(iChannel0,fragCoord)*lerp(0.,1.,atan2(fragCoord.y, fragCoord.x))'), r.out);
+r = port('#define lerp(a,b,t) mix(a,b,t)\nfloat frac(float v){return fract(v);}\nfloat atan2(float y,float x){return atan(y,x);}\n', 'float mul=2.;mat2 m=mat2(1.);vec2 v=m*fragCoord*mul;fragColor=vec4(lerp(0.,1.,frac(v.x))+atan2(v.y,1.));');
+check('the shader\'s own HLSL-named macros, functions and variables are renamed apart from the intrinsics', has(r, '#define lerp_(a,b,t) lerp(a,b,t)') && has(r, 'float frac_(float v){return frac(v);}') && has(r, 'float atan2_(float y,float x){return atan2(y, x);}') && has(r, 'float mul_=2.') && has(r, 'mul(fragCoord, m)*mul_'), r.out);
+check('a renamed macro is typed, so a constructor around it is written out', /float4\(lerp_\(0\.,1\.,frac_\(v\.x\)\)\+atan2_\(v\.y,1\.\), lerp_/.test(r.out), r.out);
+r = port('#define mul(a,b) b*a\n#define saturate(x) clamp(x, 0.0, 1.0)\n', 'mat2 m=mat2(1.);fragColor=vec4(mul(m,fragCoord),saturate(fragCoord.x),1.);');
+check('macros that are the intrinsic itself keep their name and are dropped', !has(r, '#define') && !has(r, 'mul_') && has(r, 'mul((m), (fragCoord))') && has(r, 'saturate(fragCoord.x)'), r.out);
+r = port('', 'vec3 col=vec3(0.);switch(int(fragCoord.x)){case 0: float c=1.0;col=vec3(c);break;default: col=vec3(1.);break;}fragColor=vec4(col,1.);');
+check('a declaration right after a case label is typed', has(r, 'float3(c, c, c)'), r.out);
+r = porter.transformGLSL('struct Hit{ float d; vec3 n; };\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord)\n{\n    Hit h =\n    Hit(1.0, vec3(0.));\n    fragColor=vec4(h.d);\n}\n', [], 'Image').src;
+check('a struct constructor at the start of a line is a constructor', r.indexOf('Hit_ctor(1.0') >= 0 && r.indexOf('Hit Hit_ctor(float d, float3 n)') >= 0, r);
+r = port('struct S{ float a[2]; vec2 b; };\n', 'S s = S(float[2](1.,2.), vec2(3.));fragColor=vec4(s.a[0],s.b,1.);');
+check('a constructor of a struct with an array member is reported', r.messages.some(m => m.level === 'error' && /Constructor S\(\.\.\.\) of a struct with an array member/.test(m.text)), JSON.stringify(r.messages));
+r = port('struct S{ float a[2]; vec2 b; };\n', 'S s;s.b=fragCoord;fragColor=vec4(s.b,0.,1.);');
+check('a struct with an array member that is not constructed is not reported', !r.messages.some(m => m.level === 'error'), JSON.stringify(r.messages));
+r = port('', 'vec3 p=vec3(fragCoord,1.);vec3 a=vec3(0.);for(int i=0;i<4;i++, p*=2.0){a+=vec3(p);}fragColor=vec4(a,1.);');
+check('a name after a comma in a for update clause is not a loop variable', has(r, 'a+=float3(p);'), r.out);
+r = port('struct S{vec3 a[2];float b;};\n', 'S s;s.a[1]=vec3(2.);vec4 v=vec4(fragCoord,0.,1.);fragColor=vec4(vec3(s.a[1]),1.)+vec4(vec3(v.p),v.q);');
+check('struct array fields and stpq swizzles are typed', has(r, 'float3(s.a[1])') && has(r, 'float3(v.p, v.p, v.p)'), r.out);
+r = port('', 'float x=fragCoord.x;fragColor=vec4(reflect(x,1.)+normalize(x))+vec4(normalize(vec3(x)),1.);');
+check('scalar normalize and reflect get helpers', has(r, 'float normalize(float x)') && has(r, 'float reflect(float i, float n)'), r.out);
+r = port('', 'fragColor=vec4(normalize(vec3(fragCoord,1.)),1.);');
+check('the scalar helpers are not added for vector calls', !has(r, 'float normalize(float x)'), r.out);
+r = port('const int N = int(min(3., 4.));\nfloat arr[N];\n', 'arr[0]=1.;fragColor=vec4(arr[0]);');
+check('a hoisted constant used as an array size is reported', r.messages.some(m => m.level === 'warn' && /^N is used as an array size/.test(m.text)), JSON.stringify(r.messages));
+r = port('float tau = atan(1.0)*8.0;\nfloat arr[3];\n', 'arr[0]=tau;fragColor=vec4(arr[int(tau)]);');
+check('a hoisted value used as an index is not reported', !r.messages.some(m => /array size/.test(m.text)), JSON.stringify(r.messages));
+r = port('', 'fragColor=texture(iChannel0,fragCoord,2.0);');
+check('a texture lookup keeps its mip bias', has(r, 'tex2Dbias(iChannel0, float4(fragCoord, 0.0, 2.0))') && has(r, 'float4 tex2Dbias(sampler2D s, float4 coord)') && has(r, 'tex2Dgrad(s, coord.xy, ddx(coord.xy) * scale, ddy(coord.xy) * scale)'), r.out);
+r = porter.transformGLSL('void mainImage(out vec4 fragColor, in vec2 fragCoord)\n{\n\tfragColor=texture(iChannel0,vec3(fragCoord,1.),2.0);\n}\n', [], 'Image', { cubemapSamplers: ['iChannel0'] }).src;
+check('a biased cubemap lookup goes through the strip mapping', r.indexOf('tex2Dbias(iChannel0, float4(ST_cubemap_uv(float3(fragCoord,1.)), 0.0, 2.0))') >= 0, r);
+const DY = 'void mainImage(out vec4 fragColor, in vec2 fragCoord)\n{\n\tvec3 p=vec3(fragCoord,1.);\n\tfragColor=vec4(cross(dFdx(p),dFdy(dFdy(p))),dFdy(p.x));\n\tfragColor.rgb+=vec3(dFdy(p.x));\n}\n';
+r = porter.transformGLSL(DY, [], 'Image', { flipDerivatives: true }).src;
+check('dFdy follows the flipped fragCoord in the pass that draws to the screen', r.indexOf('cross(ddx(p),(ST_DFDY_SIGN * ddy((ST_DFDY_SIGN * ddy(p)))))') >= 0 && r.indexOf('(ST_DFDY_SIGN * ddy(p.x)), (ST_DFDY_SIGN * ddy(p.x)), (ST_DFDY_SIGN * ddy(p.x)))') >= 0, r);
+r = porter.transformGLSL(DY, [], 'BufA').src;
+check('dFdy is ddy in a buffer pass, which keeps Shadertoy\'s row order', r.indexOf('ST_DFDY_SIGN') < 0 && r.indexOf('cross(ddx(p),ddy(ddy(p)))') >= 0, r);
+const lexed = porter.tokenizeSource('#define A 1.0 // see /* note\nfloat b; /* real */\n#define B 2 // one \\\n two\nint c;');
+check('a block-comment marker inside a line comment of a directive opens nothing', lexed[0].text === '#define A 1.0 // see /* note' && lexed.filter(t => t.type === 'preproc').length === 2 && lexed.some(t => t.type === 'preproc' && t.text === '#define B 2 // one \\\n two') && lexed.map(t => t.text).join('').indexOf('int c;') > 0, JSON.stringify(lexed.map(t => t.type + ':' + t.text)));
+function assembled(src, options)
+{
+	const used = new Set(), messages = [];
+	porter.detectUniforms(src, used);
+	const t = porter.transformGLSL(src, messages, null, options);
+	return porter.assembleFxFile([{ id: 'image', src: t.src, coordVar: t.coordVar, mainImageName: t.mainImageName, globalInits: t.globalInits, usedUniforms: used, channels: [], channelNames: [], filters: [], wraps: [], vflips: [], format: 'RGBA32F', selfRefChannels: [] }], true, messages, null);
+}
+let fx = assembled('#if HW_PERFORMANCE==0\n#define AA 1\n#else\n#define AA 2\n#endif\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord)\n{\n\tfragColor=vec4(float(AA),iDate.y,dFdy(fragCoord.y),1.);\n}\n', { flipDerivatives: true });
+check('HW_PERFORMANCE is defined as on desktop Shadertoy, before the shader asks for it', /#ifndef HW_PERFORMANCE\n\t#define HW_PERFORMANCE 1\n#endif/.test(fx) && fx.indexOf('#define HW_PERFORMANCE 1') < fx.indexOf('#if HW_PERFORMANCE==0') && fx.indexOf('__VERSION__') < 0 && fx.indexOf('GL_ES') < 0, fx);
+check('iDate counts the months from zero, as Shadertoy does', fx.indexOf('uniform float4 iDateRS < source = "date"; >;') >= 0 && fx.indexOf('#define iDate float4(iDateRS.x, iDateRS.y - 1.0, iDateRS.zw)') >= 0, fx);
+check('the dFdy sign is defined from ST_FLIP_Y, after it', fx.indexOf('#define ST_DFDY_SIGN (ST_FLIP_Y ? -1.0 : 1.0)') > fx.indexOf('#define ST_FLIP_Y 1'), fx);
+fx = assembled('#ifdef GL_ES\nprecision mediump float;\n#endif\n#if __VERSION__ >= 300\n#define T 1.0\n#endif\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord)\n{\n\tfragColor=vec4(T);\n}\n');
+check('GL_ES and __VERSION__ are defined when the shader asks for them', fx.indexOf('#define __VERSION__ 300') >= 0 && fx.indexOf('#define GL_ES 1') >= 0 && fx.indexOf('ST_DFDY_SIGN') < 0, fx);
 
 console.log((total - bad) + '/' + total + ' glsl-compat tests OK');
 process.exit(bad ? 1 : 0);

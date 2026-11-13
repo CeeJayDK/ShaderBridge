@@ -2,7 +2,7 @@
 // VERSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-var PORTER_VERSION = '3.5.16';
+var PORTER_VERSION = '3.5.17';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ANALYSIS PASS  — detect issues before transformation
@@ -77,7 +77,7 @@ function detectChannelUse(src) {
 // The superscript digits that number the comment placeholders («⁰», «¹» ...)
 var COMMENT_DIGITS = '⁰¹²³⁴⁵⁶⁷⁸⁹';
 
-// texture() / texture2D() → tex2D()
+// texture() / texture2D() → tex2D();  texture(s, uv, bias) → tex2Dbias(s, float4(uv, 0.0, bias))
 // Uses a paren-balanced walker to split args correctly — prevents [^)]+ from
 // spanning newlines and consuming code beyond the call site.
 function rewriteTextureCalls(src)
@@ -103,10 +103,12 @@ function rewriteTextureCalls(src)
 		var inner = src.slice(parenOpen + 1, k - 1);
 		var replacement;
 		if (commaPositions.length >= 2) {
-			// 3+ args: strip everything after second comma (bias arg)
+			// the third argument is a mip bias. ReShade FX has no biased lookup, so tex2Dbias is a helper
+			// of the porter (injectGlslHelpers); its float4 coordinate is the one tex2Dlod takes
 			var arg1 = src.slice(parenOpen + 1, commaPositions[0]).trim();
 			var arg2 = src.slice(commaPositions[0] + 1, commaPositions[1]).trim();
-			replacement = 'tex2D(' + arg1 + ', ' + arg2 + ')';
+			var arg3 = src.slice(commaPositions[1] + 1, commaPositions.length > 2 ? commaPositions[2] : k - 1).trim();
+			replacement = 'tex2Dbias(' + arg1 + ', float4(' + arg2 + ', 0.0, ' + arg3 + '))';
 		}
 		else {
 			// 1 or 2 args: simple rename
@@ -399,6 +401,8 @@ function stepRemoveDirectives(ctx)
 	var s = ctx.src;
 	// ── Remove directives not valid in HLSL ──────────────────────────────────
 	s = s.replace(/#version\s+\d+[^\n]*/g, '');
+	// WebGL only warns about an extension it does not know; ReShade's preprocessor has no such directive
+	s = s.replace(/^[ \t]*#[ \t]*extension\b[^\n]*/gm, '');
 	s = s.replace(/\blayout\s*\([^)]*\)\s*/g, '');
 	ctx.src = s;
 }
@@ -570,8 +574,128 @@ function stepIntrinsicNames(ctx)
 	s = s.replace(/\bfract\s*\(/g, 'frac(');
 	s = s.replace(/\binversesqrt\s*\(/g, 'rsqrt(');
 	s = s.replace(/\bdFdx\s*\(/g, 'ddx(');
+	if (ctx.options && ctx.options.flipDerivatives)
+	{
+		// The pass that draws to the screen has fragCoord.y running up while ReShade's rows run down
+		// (ST_FLIP_Y), so the derivative along y changes sign with it: ST_DFDY_SIGN is -1 or 1.
+		var flipDy = function (text)
+		{
+			var out = '', last = 0, re = /\bdFdy\s*\(/g, m;
+			while ((m = re.exec(text)) !== null)
+			{
+				var depth = 1, k = m.index + m[0].length;
+				while (k < text.length && depth > 0) { if (text[k] === '(') { depth++; } else if (text[k] === ')') { depth--; } k++; }
+				if (depth !== 0) { continue; }
+				out += text.slice(last, m.index) + '(ST_DFDY_SIGN * ddy(' + flipDy(text.slice(m.index + m[0].length, k - 1)) + '))';
+				last = k;
+				re.lastIndex = k;
+			}
+			return out + text.slice(last);
+		};
+		s = flipDy(s);
+	}
 	s = s.replace(/\bdFdy\s*\(/g, 'ddy(');
 	ctx.src = s;
+}
+
+// GLSL built-ins that a later step finds by their name, and the HLSL intrinsics those steps write.
+var GLSL_REWRITTEN_FUNCTIONS = (function ()
+{
+	var map = Object.create(null);
+	('mix fract inversesqrt dFdx dFdy atan texture texture2D textureLod textureGrad texelFetch textureSize textureCube textureCubeLod '
+		+ 'textureOffset textureLodOffset textureGradOffset texelFetchOffset textureProj lessThan lessThanEqual greaterThan greaterThanEqual '
+		+ 'equal notEqual not roundEven floatBitsToInt floatBitsToUint intBitsToFloat uintBitsToFloat').split(' ').forEach(function (n) { map[n] = true; });
+	return map;
+}());
+var HLSL_INTRINSIC_NAMES = ('frac lerp rsqrt ddx ddy atan2 saturate mul rcp tex2D tex2Dlod tex2Dfetch tex2Dsize tex2Dgrad tex2Dbias '
+	+ 'tex3D tex3Dlod tex3Dfetch tex3Dsize tex3Dgrad texCUBE texCUBElod asint asuint asfloat f16tof32 f32tof16').split(' ');
+
+// #define mul(a,b) b*a : for GLSL this is HLSL's own mul(a, b) (see stepDropIntrinsicMacros)
+function mulIdentityMacroPattern()
+{
+	return /^[ \t]*#[ \t]*define[ \t]+mul[ \t]*\([ \t]*(\w+)[ \t]*,[ \t]*(\w+)[ \t]*\)[ \t]*\(?[ \t]*\2[ \t]*\)?[ \t]*\*[ \t]*\(?[ \t]*\1[ \t]*\)?[ \t]*(?:\n|$)/gm;
+}
+
+function stepShaderIntrinsicNames(ctx)
+{
+	// A shader ported from HLSL often brings its own lerp, frac, saturate, mul, atan2 ... as a macro,
+	// a function or a variable. GLSL has none of these names, so every one in the source is the
+	// shader's own, while the steps below write the HLSL intrinsics of the same names. Left alone the
+	// two meet: a wrapper calls itself, a variable hides the intrinsic, a macro captures the porter's
+	// calls. The shader's names get a trailing underscore before any intrinsic is written.
+	var tokens = tokenizeSource(ctx.src), definitions = Object.create(null), depth = 0;
+	tokens.forEach(function (t)
+	{
+		if (t.type !== 'preproc') { return; }
+		var branch = /^#\s*(if|ifdef|ifndef|endif)\b/.exec(t.text);
+		if (branch) { depth += branch[1] === 'endif' ? -1 : 1; }
+		var m = /^#\s*(define|undef)\s+([A-Za-z_]\w*)(\(([^)]*)\))?([^\n]*)/.exec(t.text.replace(/\\\r?\n/g, ' '));
+		if (!m) { return; }
+		var d = definitions[m[2]] = definitions[m[2]] || { count: 0, conditional: false };
+		d.count++;
+		d.conditional = d.conditional || depth > 0 || m[1] === 'undef';
+		d.params = m[3] ? m[4].split(',').map(function (x) { return x.trim(); }).filter(Boolean) : null;
+		d.body = m[5].replace(/«[^»]*»/g, ' ').trim();
+		d.token = t;
+	});
+	function renameWords(text, map)
+	{
+		return text.replace(/"(?:\\.|[^"\\])*"|\b[A-Za-z_]\w*\b/g, function (word) { return word[0] !== '"' && map[word] ? map[word] : word; });
+	}
+	function apply(map, dropped)
+	{
+		tokens = tokenizeSource(tokens.map(function (t)
+		{
+			if (t.type === 'ident') { return map[t.text] || t.text; }
+			if (t.type !== 'preproc' || /^#\s*(include|pragma|error|warning)\b/.test(t.text)) { return t.text; }
+			return dropped && dropped.indexOf(t) >= 0 ? '' : renameWords(t.text, map);
+		}).join(''));
+	}
+
+	// #define lerp mix : the name stands for a built-in that is rewritten where it is called, which a
+	// macro hides until ReShade's preprocessor runs. Use the built-in's own name instead.
+	var aliases = Object.create(null), aliasTokens = [];
+	Object.keys(definitions).forEach(function (name)
+	{
+		var d = definitions[name];
+		if (d.count === 1 && !d.conditional && !d.params && GLSL_REWRITTEN_FUNCTIONS[d.body]) { aliases[name] = d.body; aliasTokens.push(d.token); }
+	});
+	var aliasNames = Object.keys(aliases);
+	if (aliasNames.length)
+	{
+		apply(aliases, aliasTokens);
+		ctx.messages.push({ level: 'info', text: 'Replaced macro(s) that only rename a GLSL built-in with the built-in itself: ' + aliasNames.map(function (n) { return n + ' → ' + aliases[n]; }).join(', ') + '.' });
+	}
+
+	// The two macros stepDropIntrinsicMacros removes are the intrinsic itself and keep their name.
+	var kept = Object.create(null);
+	if (mulIdentityMacroPattern().test(ctx.src)) { kept.mul = true; }
+	var sat = definitions.saturate;
+	if (sat && sat.params && sat.params.length === 1
+		&& new RegExp('^\\(?\\s*clamp\\s*\\(\\s*\\(?\\s*' + sat.params[0] + '\\s*\\)?\\s*,\\s*(?:0|0?\\.0+|0\\.)f?\\s*,\\s*(?:1|1\\.0*)f?\\s*\\)\\s*\\)?$').test(sat.body)) { kept.saturate = true; }
+
+	var used = Object.create(null);
+	tokens.forEach(function (t)
+	{
+		if (t.type === 'ident') { used[t.text] = true; }
+		else if (t.type === 'preproc') { (t.text.match(/\b[A-Za-z_]\w*\b/g) || []).forEach(function (w) { used[w] = true; }); }
+	});
+	var renames = Object.create(null), renamed = [];
+	HLSL_INTRINSIC_NAMES.forEach(function (name)
+	{
+		if (!used[name] || kept[name] || aliases[name]) { return; }
+		var replacement = name + '_';
+		while (used[replacement]) { replacement += '_'; }
+		used[replacement] = true;
+		renames[name] = replacement;
+		renamed.push(name + ' → ' + replacement);
+	});
+	if (renamed.length)
+	{
+		apply(renames);
+		ctx.messages.push({ level: 'info', text: 'Renamed the shader\'s own identifiers that are HLSL intrinsic names: ' + renamed.join(', ') + '.' });
+	}
+	ctx.src = tokens.map(function (t) { return t.text; }).join('');
 }
 
 function stepReservedIdentifiers(ctx)
@@ -1357,13 +1481,26 @@ function stepEmptyChannels(ctx)
 function stepClampToSaturate(ctx)
 {
 	var s = ctx.src;
-	// A shader's scalar helper can shadow the intrinsic's vector overloads.
-	// Introducing calls to it also makes a clamp-based helper recurse.
-	if (analyzeSource(s).functions.saturate) { return; }
+	// (a saturate of the shader's own has another name by now: stepShaderIntrinsicNames)
 	// ── clamp(x, 0.0, 1.0) → saturate(x) ────────────────────────────────────
-	s = s.replace(/\bclamp\s*\(\s*([^,]+),\s*0\.0+f?\s*,\s*1\.0+f?\s*\)/g, 'saturate($1)');
-	s = s.replace(/\bclamp\s*\(\s*([^,]+),\s*0\s*,\s*1\s*\)/g, 'saturate($1)');
-	ctx.src = s;
+	// The arguments are split at the commas of this call only, so a clamp inside the first
+	// argument is a call of its own and is rewritten in turn.
+	function rewrite(text)
+	{
+		var out = '', last = 0, re = /\bclamp\s*\(/g, m;
+		while ((m = re.exec(text)) !== null)
+		{
+			var parsed = splitCallArgs(text, m.index + m[0].length - 1);
+			if (!parsed || text[parsed.end - 1] !== ')') { continue; }
+			var a = parsed.args;
+			var unit = a.length === 2 && ((/^0\.0+f?$/.test(a[0]) && /^1\.0+f?$/.test(a[1])) || (a[0] === '0' && a[1] === '1'));
+			out += text.slice(last, m.index) + (unit ? 'saturate(' + rewrite(parsed.samp) + ')' : m[0] + rewrite(text.slice(m.index + m[0].length, parsed.end)));
+			last = parsed.end;
+			re.lastIndex = last;
+		}
+		return out + text.slice(last);
+	}
+	ctx.src = rewrite(s);
 }
 
 function rewriteOutsideDirectives(src, rewrite)
@@ -1458,8 +1595,9 @@ function stepLoopGradientTex(ctx)
 		// Compute shaders have no implicit screen-space texture derivatives.
 		s = rewriteExpressions(s, function (node, render)
 		{
-			if (node.kind !== 'call' || (node.name !== 'tex2D' && node.name !== 'tex3D')) { return null; }
+			if (node.kind !== 'call' || (node.name !== 'tex2D' && node.name !== 'tex3D' && node.name !== 'tex2Dbias')) { return null; }
 			var args = node.args.map(render);
+			if (node.name === 'tex2Dbias') { return 'tex2Dlod(' + args.join(', ') + ')'; }
 			return node.name + 'lod(' + args[0] + ', float4(' + args[1] + (node.name === 'tex2D' ? ', 0.0' : '') + ', 0.0)' + (args[2] ? ', ' + args[2] : '') + ')';
 		}).src;
 	}
@@ -1478,7 +1616,7 @@ function stepDropIntrinsicMacros(ctx)
 	// expand every mul(M, v) into a component-wise v*M. The same goes for a saturate macro,
 	// which the clamp(x, 0, 1) rewrite above turns into  #define saturate(a) saturate(a).
 	var droppedMacros = [];
-	s = s.replace(/^[ \t]*#[ \t]*define[ \t]+mul[ \t]*\([ \t]*(\w+)[ \t]*,[ \t]*(\w+)[ \t]*\)[ \t]*\(?[ \t]*\2[ \t]*\)?[ \t]*\*[ \t]*\(?[ \t]*\1[ \t]*\)?[ \t]*(?:\n|$)/gm,
+	s = s.replace(mulIdentityMacroPattern(),
 		function () { droppedMacros.push('mul'); return ''; });
 	s = s.replace(/^[ \t]*#[ \t]*define[ \t]+saturate[ \t]*\([ \t]*(\w+)[ \t]*\)[ \t]*saturate[ \t]*\([ \t]*\1[ \t]*\)[ \t]*(?:\n|$)/gm,
 		function () { droppedMacros.push('saturate'); return ''; });
@@ -1533,6 +1671,13 @@ function stepHoistGlobalInits(ctx)
 			else { globalInits.push(name + ' = ' + init.replace(/\s+/g, ' ').trim() + ';'); }
 			return 'static ' + type + ' ' + name + (dims || '') + ';';
 		});
+	hoisted.slice(ST_RUNTIME_INPUTS.length).forEach(function (name)
+	{
+		if (new RegExp('(?:^|[;{}(,\\s])(?!(?:return|else|case)\\b)[A-Za-z_]\\w*\\s+[A-Za-z_]\\w*\\s*\\[[^\\[\\];]*\\b' + name + '\\b[^\\[\\];]*\\]\\s*[;=,)]').test(s))
+		{
+			ctx.messages.push({ level: 'warn', text: name + ' is used as an array size, but its initialiser is not a literal expression in ReShade FX, so it is assigned at run time. Write the value of ' + name + ' out as a number.' });
+		}
+	});
 	ctx.globalInits = globalInits;
 	ctx.src = s;
 }
@@ -2073,7 +2218,8 @@ var TRANSFORM_STEPS = [
 		after: ['typeNames', 'arrayDeclarators', 'conditionalLoopBodies'],
 		why: 'member types must already be in HLSL form'
 	},
-	{ name: 'intrinsicNames', run: stepIntrinsicNames },
+	{ name: 'shaderIntrinsicNames', run: stepShaderIntrinsicNames, after: ['extractComments'], why: 'comments must not be read as code, and the names must change before any step writes an intrinsic' },
+	{ name: 'intrinsicNames', run: stepIntrinsicNames, after: ['shaderIntrinsicNames'], why: 'the shader\'s own lerp, frac ... must be renamed before the intrinsics of those names are written' },
 	{ name: 'reservedIdentifiers', run: stepReservedIdentifiers },
 	{ name: 'unsignedFloatConstants', run: stepUnsignedFloatConstants, after: ['typeNames'], why: 'floating-point constructor names must already be in HLSL form' },
 	{ name: 'compatibilityMacros', run: stepCompatibilityMacros, after: ['typeNames', 'reservedIdentifiers'], why: 'macro bodies must use the same type and identifier names as the expressions they expand into' },
@@ -2172,7 +2318,7 @@ var TRANSFORM_STEPS = [
 		after: ['textureCalls', 'textureGrad', 'textureLod', 'texelFetch', 'cubemapLookups'],
 		why: 'it looks for the tex2D family calls those steps make'
 	},
-	{ name: 'clampToSaturate', run: stepClampToSaturate },
+	{ name: 'clampToSaturate', run: stepClampToSaturate, after: ['shaderIntrinsicNames'], why: 'a saturate the shader defines itself must have its own name before calls to the intrinsic are written' },
 	{ name: 'mainImageSignature', run: stepMainImageSignature },
 	{
 		name: 'mainImageBody',
@@ -2366,6 +2512,9 @@ function rewriteStructConstructors(src, messages) {
 		if (members.length > 0) {
 			structs[structName] = members;
 		}
+		else if (/\[/.test(body) && new RegExp('(?<![\\w.])(?<!struct\\s+)' + structName + '\\s*\\(').test(src)) {
+			messages.push({ level: 'error', text: 'Constructor ' + structName + '(...) of a struct with an array member cannot be translated: ReShade FX has no struct constructors and cannot pass an array literal. Declare the value and assign its members one by one.' });
+		}
 	}
 
 	if (Object.keys(structs).length === 0) { return src; }
@@ -2387,16 +2536,8 @@ function rewriteStructConstructors(src, messages) {
 			// Skip if preceded by 'struct ' keyword
 			var before = result.slice(Math.max(0, sm2.index - 10), sm2.index);
 			if (/struct\s+$/.test(before)) { continue; }
-			// Skip if this is a function definition returning the struct type
-			// (e.g. "Hit march(..." — name followed by ( but preceded by return type context)
-			// We check: is the char before name (skipping spaces) something that suggests
-			// this is a function return type? Specifically a newline or ; or }
-			var charBefore = '';
-			var cb = sm2.index - 1;
-			while (cb >= 0 && result[cb] === ' ') { cb--; }
-			charBefore = cb >= 0 ? result[cb] : '';
-			// If preceded by newline/semicolon/brace it's a function definition, skip
-			if (charBefore === '\n' || charBefore === '}' || charBefore === ';') { continue; }
+			// The name directly followed by ( is a constructor call wherever it stands, also at the
+			// start of a line; a function that returns the struct has its own name in between.
 			hasCall = true;
 			break;
 		}
@@ -2941,7 +3082,7 @@ function injectCubemapHelper(src)
 // function parameter. Without this the third component is silently dropped and the wrong texel read.
 //
 //   tex2D(s, dir)                         →  tex2D(s, ST_cubemap_uv(dir))
-//   tex2Dlod(s, float4(dir, 0.0, lod))    →  tex2Dlod(s, float4(ST_cubemap_uv(dir), 0.0, lod))
+//   tex2Dlod(s, float4(dir, 0.0, lod))    →  tex2Dlod(s, float4(ST_cubemap_uv(dir), 0.0, lod))    (tex2Dbias likewise)
 // ─────────────────────────────────────────────────────────────────────────────
 
 function rewriteCubemapLookups(src, cubemapSamplers, messages)
@@ -2968,29 +3109,25 @@ function rewriteCubemapLookups(src, cubemapSamplers, messages)
 			return 'tex2D(' + render(node.args[0]) + ', ST_cubemap_uv(' + render(coord) + '))';
 		}
 
-		if (node.name === 'tex2Dlod')
+		// tex2Dlod and tex2Dbias take the same float4 coordinate: (dir, 0.0, lod or bias)
 		{
 			var ctor = coord.kind === 'call' && coord.name === 'float4' && coord.args.length >= 2 && coord.args.length <= 3;
 			var first = ctor && coord.args[0].type && anParseType(coord.args[0].type);
-			if (ctor && first && first.kind === 'vec' && first.rows === 3)
+			if (ctor && ((first && first.kind === 'vec' && first.rows === 3) || (cubeSampler && !first)))
 			{
 				var lod = render(coord.args[coord.args.length - 1]);
 				count++;
-				return 'tex2Dlod(' + render(node.args[0]) + ', float4(ST_cubemap_uv(' + render(coord.args[0]) + '), 0.0, ' + lod + ')' + (node.args.length > 2 ? ', ' + render(node.args[2]) : '') + ')';
+				return node.name + '(' + render(node.args[0]) + ', float4(ST_cubemap_uv(' + render(coord.args[0]) + '), 0.0, ' + lod + ')' + (node.args.length > 2 ? ', ' + render(node.args[2]) : '') + ')';
 			}
 			if (cubeSampler && !ctor)
 			{
 				var c = render(coord);
 				var wrapped = /^[\w.]+$/.test(c) ? c : '(' + c + ')';
 				count++;
-				return 'tex2Dlod(' + render(node.args[0]) + ', float4(ST_cubemap_uv(' + wrapped + '.xyz), 0.0, ' + wrapped + '.w)' + (node.args.length > 2 ? ', ' + render(node.args[2]) : '') + ')';
+				return node.name + '(' + render(node.args[0]) + ', float4(ST_cubemap_uv(' + wrapped + '.xyz), 0.0, ' + wrapped + '.w)' + (node.args.length > 2 ? ', ' + render(node.args[2]) : '') + ')';
 			}
 			return null;
 		}
-
-		// tex2Dbias on a cubemap sampler is not translated
-		if (cubeSampler) { unsupported['tex2Dbias'] = true; }
-		return null;
 	});
 
 	if (messages && count > 0)
@@ -3000,10 +3137,6 @@ function rewriteCubemapLookups(src, cubemapSamplers, messages)
 	if (messages && unsupported['tex2Dgrad'])
 	{
 		messages.push({ level: 'warn', text: 'A cubemap lookup with explicit gradients (textureGrad) was turned into a plain lookup; the gradients cannot be mapped onto the strip.' });
-	}
-	if (messages && unsupported['tex2Dbias'])
-	{
-		messages.push({ level: 'warn', text: 'A cubemap lookup with a bias was not translated; check it by hand.' });
 	}
 	return injectCubemapHelper(result.src);
 }
@@ -3816,6 +3949,24 @@ function injectGlslHelpers(src)
 		unpackSnorm2x16: 'float2 unpackSnorm2x16(uint p)\n{\n\treturn clamp(float2(int2(uint2(p << 16, p)) >> 16) / 32767.0, -1.0, 1.0);\n}\n\n'
 	};
 	Object.keys(packing).forEach(function (name) { if (needs(name)) { helpers += packing[name]; } });
+	// texture(s, uv, bias): scaling the screen-space gradients by 2^bias adds the bias to the mip level
+	if (needs('tex2Dbias'))
+	{
+		helpers += 'float4 tex2Dbias(sampler2D s, float4 coord)\n{\n\tfloat scale = exp2(coord.w);\n\treturn tex2Dgrad(s, coord.xy, ddx(coord.xy) * scale, ddy(coord.xy) * scale);\n}\n\n';
+	}
+	// GLSL has normalize and reflect for a single float; ReShade FX only has the vector forms.
+	if (/\b(?:normalize|reflect)\s*\(/.test(src))
+	{
+		var scalarCalls = {};
+		var visitScalar = function (node)
+		{
+			if (node.kind === 'call' && (node.name === 'normalize' || node.name === 'reflect') && node.args.length && node.args[0].type === 'float') { scalarCalls[node.name] = true; }
+			exprChildren(node).forEach(visitScalar);
+		};
+		analyzeSource(src).eachExpression(visitScalar);
+		if (scalarCalls.normalize) { helpers += 'float normalize(float x)\n{\n\treturn x / abs(x);\n}\n\n'; }
+		if (scalarCalls.reflect) { helpers += 'float reflect(float i, float n)\n{\n\treturn i - 2.0 * n * i * n;\n}\n\n'; }
+	}
 	['inverse', 'outerProduct', 'matrixCompMult'].forEach(function (name)
 	{
 		if (!needs(name)) { return; }

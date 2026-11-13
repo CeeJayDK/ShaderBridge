@@ -185,6 +185,7 @@ const EXAMPLES = {
 	floatSuffix: 'void mainImage(out vec4 fragColor, in vec2 fragCoord)\n{\n\tfloat a = 1.0f;\n\tfragColor = vec4(a);\n}\n',
 	typeNames: 'void mainImage(out vec4 fragColor, in vec2 fragCoord)\n{\n\tvec3 c = vec3(0.);\n\tfragColor = vec4(c, 1.);\n}\n',
 	structConstructors: 'struct S { float a; float b; };\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord)\n{\n\tS s = S(1., 2.);\n\tfragColor = vec4(s.a, s.b, 0., 1.);\n}\n',
+	shaderIntrinsicNames: 'float frac(float x)\n{\n\treturn fract(x);\n}\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord)\n{\n\tfragColor = vec4(frac(fragCoord.x));\n}\n',
 	intrinsicNames: 'void mainImage(out vec4 fragColor, in vec2 fragCoord)\n{\n\tfragColor = vec4(mix(0., 1., 0.5));\n}\n',
 	reservedIdentifiers: 'void mainImage(out vec4 fragColor, in vec2 fragCoord)\n{\n\tfloat linear = 1.0;\n\tfragColor = vec4(linear);\n}\n',
 	splitGlobalDeclarators: 'float a = 1.0, b = 2.0;\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord)\n{\n\tfragColor = vec4(a, b, 0., 1.);\n}\n',

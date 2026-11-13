@@ -1,6 +1,26 @@
 // Small GLSL idioms common in Shadertoy shaders. Each entry: [id, helpers (global code), body of mainImage].
 // Every one is valid GLSL ES 3.00 as Shadertoy accepts it; the porter must turn it into a compiling effect.
 module.exports = [
+	// found by the 3.5.17 review
+	['clamp_nested','','float x=fragCoord.x;float y=clamp(pow(clamp(x,0.0,1.0),2.0),0.0,1.0);float z=clamp(1.0-clamp(x,0.0,1.0),0.0,1.0);fragColor=vec4(y,z,0.,1.);'],
+	['shim_alias_macros','#define lerp mix\n#define frac fract\n#define atan2 atan\n','float x=fragCoord.x;fragColor=vec4(lerp(0.,1.,frac(x)),atan2(x,1.),0.,1.);'],
+	['shim_alias_texture','#define tex2D texture\n#define ddx dFdx\n','fragColor=tex2D(iChannel0,fragCoord/iResolution.xy)+ddx(fragCoord.x);'],
+	['shim_function_macros','#define lerp(a,b,t) mix(a,b,t)\n#define frac(x) fract(x)\n#define atan2(y,x) atan(y,x)\n','float x=fragCoord.x;fragColor=vec4(lerp(0.,1.,frac(x))+atan2(x,1.));'],
+	['shim_functions','float frac(float v){return fract(v);}\nvec3 lerp(vec3 a,vec3 b,float t){return mix(a,b,t);}\nfloat atan2(float y,float x){return atan(y,x);}\nfloat rsqrt(float v){return inversesqrt(v);}\nvec3 mul(mat3 m,vec3 v){return m*v;}\n','float x=fragCoord.x;fragColor=vec4(mul(mat3(1.),lerp(vec3(0.),vec3(1.),frac(x))),atan2(x,1.)+rsqrt(x));'],
+	['shim_variable_names','float scale(float saturate){return clamp(saturate*2.,0.0,1.0);}\n','float t=fragCoord.x;float frac=fract(t);float u=fract(t*2.)+frac;float mul=2.;mat2 m=mat2(1.,2.,3.,4.);vec2 v=m*fragCoord*mul;float lerp=mix(0.,1.,u);fragColor=vec4(v,scale(t)+lerp,mix(u,1.,.5));'],
+	['extension_directive','#extension GL_OES_standard_derivatives : enable\n','fragColor=vec4(fwidth(fragCoord.x));'],
+	['case_declaration','','vec3 col=vec3(0.);switch(int(fragCoord.x)){case 0: float c=1.0;col=vec3(c);break;default: col=vec3(1.);break;}fragColor=vec4(col,1.);'],
+	['struct_ctor_line_start','struct Hit{ float d; vec3 n; };\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord)\n{\n    Hit h =\n    Hit(1.0, vec3(0.));\n    fragColor=vec4(h.d);\n}\n','',{rawSource:true}],
+	['for_update_comma','','vec3 p=vec3(fragCoord,1.);vec3 a=vec3(0.);for(int i=0;i<4;i++,p*=2.0){a+=vec3(p);}fragColor=vec4(a,1.);'],
+	['struct_array_field','struct S{vec3 a[2];float b;};\n','S s;s.a[0]=vec3(1.);s.a[1]=vec3(2.);s.b=2.;vec3 q=vec3(s.a[1]);fragColor=vec4(q,s.b);'],
+	['swizzle_stpq','','vec4 v=vec4(fragCoord,0.,1.);vec3 c=vec3(v.p);vec2 d=v.st;fragColor=vec4(c.x,d,v.q);'],
+	['scalar_normalize_reflect','','float x=fragCoord.x;fragColor=vec4(reflect(x,1.)+normalize(x));'],
+	['texture_bias','','fragColor=texture(iChannel0,fragCoord/iResolution.xy,2.0);'],
+	['texture_bias_loop','','vec4 a=vec4(0.);for(int i=0;i<4;i++){a+=texture(iChannel0,fragCoord/iResolution.xy,float(i));}fragColor=a;'],
+	['texture_bias_cubemap','','fragColor=texture(iChannel0,vec3(fragCoord,1.),2.0);',{channel0:'cubemap'}],
+	['texture_bias_none','','fragColor=texture(iChannel0,fragCoord/iResolution.xy,2.0);',{channel0:'none'}],
+	['predefined_macros','#if HW_PERFORMANCE==0\n#define AA 1\n#else\n#define AA 2\n#endif\n#ifdef GL_ES\n#define G 1.\n#endif\n#if __VERSION__ >= 300\n#define T 1.\n#endif\n','fragColor=vec4(float(AA),G,T,1.);'],
+	['define_comment_block_marker','#define A 1.0 // see /* note\nvec4 g(vec2 u){return texture(iChannel0,u)*A;} /* real */\n','fragColor=g(fragCoord/iResolution.xy);'],
 	['frame_parameter_shadowing','int shadow(int iFrame){return iFrame+3;}\n','fragColor=vec4(float(shadow(iFrame)));'],
 	...[0,1].map(mode=>['conditional_return_fallback_'+mode,'#define MODE '+mode+'\nfloat f(){\n#if MODE\nreturn .25;\n#endif\nreturn .75;}\n','fragColor=vec4(f());']),
 	['inline_struct_instances','struct Grid{vec2 position;float value;} grid,others[2];\n','grid.position=fragCoord;others[0].value=.5;fragColor=vec4(grid.position,others[0].value,1.);'],
