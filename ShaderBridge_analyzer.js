@@ -120,7 +120,8 @@ function anBinaryType(op, lt, rt)
 
 var AN_KNOWN_GLOBALS = {
 	iResolution: 'float3', iTime: 'float', iTimeDelta: 'float', iFrame: 'int', iMouse: 'float4',
-	iDate: 'float4', iSampleRate: 'float', iChannelResolution: 'float3[]', iChannelTime: 'float[]'
+	iDate: 'float4', iSampleRate: 'float', iChannelResolution: 'float3[]', iChannelTime: 'float[]',
+	ST_DFDY_SIGN: 'float'
 };
 
 // ── analyzer ────────────────────────────────────────────────────────────────
@@ -298,11 +299,13 @@ function anScanTopLevel(an)
 				var ft = resolveType(txt(j));
 				if (isTypeName(ft))
 				{
-					var fnames = [];
+					var fdepth = 0;
 					j++;
 					while (j < close && txt(j) !== ';')
 					{
-						if (T(j).type === 'ident' && txt(j - 1) !== '[') { fields[txt(j)] = ft; }
+						if (txt(j) === '[') { fdepth++; }
+						else if (txt(j) === ']') { fdepth--; }
+						else if (fdepth === 0 && T(j).type === 'ident') { fields[txt(j)] = ft + (txt(j + 1) === '[' ? '[]' : ''); }
 						j++;
 					}
 				}
@@ -428,8 +431,18 @@ function anScanLocals(an)
 					var hc = matchClose(j + 1, '(', ')');
 					scopes.push({ from: j, names: [] });
 					var rec = { bodyBlockDepth: scopes.length, single: txt(hc + 1) !== '{' };
-					// declarations inside the header go into the for scope
-					scanDeclRange(j + 2, hc);
+					// declarations inside the header go into the for scope; they end at the first ';',
+					// so a name after a comma in the update clause (i++, p *= 2.) declares nothing
+					var initEnd = j + 2, initDepth = 0;
+					while (initEnd < hc)
+					{
+						var is = txt(initEnd);
+						if (is === '(' || is === '[' || is === '{') { initDepth++; }
+						else if (is === ')' || is === ']' || is === '}') { initDepth--; }
+						else if (is === ';' && initDepth === 0) { break; }
+						initEnd++;
+					}
+					scanDeclRange(j + 2, initEnd);
 					if (rec.single)
 					{
 						// single statement body: scope ends at its terminating ';'
@@ -441,6 +454,12 @@ function anScanLocals(an)
 					}
 					else { forStack.push(rec); }
 					j = hc + 1; stmtStart = true; continue;
+				}
+				if (stmtStart && (s2 === 'case' || s2 === 'default'))
+				{
+					// the statement after a label starts a statement too:  case 0: float c = 1.;
+					while (j < fn.bodyTo && txt(j) !== ':') { j++; }
+					j++; continue;
 				}
 				if (stmtStart || s2 === ';')
 				{
@@ -763,7 +782,7 @@ function anAddParser(an)
 					if (!f || f.type !== 'ident') { return null; }
 					var bt = r.node.type, rt = null;
 					var pt = bt && anParseType(bt);
-					if (pt && /^[xyzwrgba]+$/.test(f.text) && f.text.length <= 4) { rt = anVec(pt.base, f.text.length); }
+					if (pt && /^(?:[xyzw]+|[rgba]+|[stpq]+)$/.test(f.text) && f.text.length <= 4) { rt = anVec(pt.base, f.text.length); }
 					else if (bt && A.structs[bt]) { rt = A.structs[bt].fields[f.text] || null; }
 					r = { node: { kind: 'member', from: r.node.from, to: r.next + 1, type: rt, base: r.node, field: f.text }, next: r.next + 2 };
 				}

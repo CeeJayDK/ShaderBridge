@@ -86,8 +86,10 @@ function buildUniformBlock(usedUniforms) {
 	}
 	if (usedUniforms.has('iDate')) {
 		sep();
-		lines.push('// iDate — float4(year, month 1-12, day 1-31, seconds since midnight)');
-		lines.push('uniform float4 iDate < source = "date"; >;');
+		lines.push('// iDate — float4(year, month 0-11, day 1-31, seconds since midnight)');
+		// Shadertoy counts the months from 0 (JavaScript's getMonth), ReShade from 1
+		lines.push('uniform float4 iDateRS < source = "date"; >;');
+		lines.push('#define iDate float4(iDateRS.x, iDateRS.y - 1.0, iDateRS.zw)');
 	}
 	if (usedUniforms.has('iSampleRate')) {
 		sep();
@@ -499,6 +501,15 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 
 	lines.push(HELPER_SOURCE);
 	lines.push('');
+	// What Shadertoy (WebGL 2) defines before the shader: a conditional that asks for one must take the same branch.
+	var allPassSource = transformedPasses.map(function (p) { return p.src; }).join('\n');
+	if (/\bHW_PERFORMANCE\b/.test(allPassSource))
+	{
+		lines.push('// HW_PERFORMANCE: 1 = desktop hardware (Shadertoy\'s value there), 0 = mobile');
+		lines.push('#ifndef HW_PERFORMANCE', '\t#define HW_PERFORMANCE 1', '#endif', '');
+	}
+	if (/\b__VERSION__\b/.test(allPassSource)) { lines.push('#define __VERSION__ 300', ''); }
+	if (/\bGL_ES\b/.test(allPassSource)) { lines.push('#define GL_ES 1', ''); }
 	if (bufTexNames.volumeA)
 	{
 		lines.push('#if __RENDERER__ < 0xb000', '#error Generated volumes require compute shader support (DirectX 11 or newer).', '#endif');
@@ -1083,6 +1094,11 @@ function assembleFxFile(transformedPasses, flipY, messages, shaderInfo) {
 		lines.push('float4 PS_ST_ClearEmpty(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target', '{', '\treturn float4(0.0, 0.0, 0.0, 0.0);', '}', '');
 	}
 	lines.push('// ── Technique ──');
+	if (/\bST_DFDY_SIGN\b/.test(allPassSource))
+	{
+		flipOptionLines.push('// dFdy follows fragCoord.y, which runs against ReShade\'s rows when ST_FLIP_Y is set');
+		flipOptionLines.push('#define ST_DFDY_SIGN (ST_FLIP_Y ? -1.0 : 1.0)');
+	}
 	flipOptionLines.push('');
 	lines.splice.apply(lines, [flipOptionsAt, 0].concat(flipOptionLines));
 

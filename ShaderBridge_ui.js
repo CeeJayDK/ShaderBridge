@@ -432,9 +432,10 @@ function renderChannelOptions(bar, p, idx)
 	];
 	BUF_IDS.forEach(function(bid)
 	{
-		if (activePasses.indexOf(bid) !== -1 && bid !== activePassId)
+		// a buffer that reads itself gets its own previous frame
+		if (activePasses.indexOf(bid) !== -1)
 		{
-			typeOptions.push({ value: bid, label: PASS_LABELS[bid] });
+			typeOptions.push({ value: bid, label: PASS_LABELS[bid] + (bid === activePassId ? ' (previous frame)' : '') });
 		}
 	});
 	typeOptions.push(
@@ -617,6 +618,8 @@ function convert()
 	    var filters      = ['linear', 'linear', 'linear', 'linear'];
 	    var wraps        = ['repeat', 'repeat', 'repeat', 'repeat'];
 	    var vflips       = [false, false, false, false];
+	    // the channels that read this pass's own output, as they are set now (not as a JSON file had them)
+	    var selfRefChannels = [];
 	    if (p && p.channels)
 	    {
 	        for (var ci = 0; ci <= 3; ci++)
@@ -634,10 +637,11 @@ function convert()
 	            filters[ci]      = ch.filter || 'linear';
 	            wraps[ci]        = ch.wrap   || 'repeat';
 	            vflips[ci]       = !!ch.vflip;
+	            if (ch.type === id) { selfRefChannels.push(ci); }
 	        }
 	    }
 
-	    passList.push({ id: id, src: src, channels: channels, channelNames: channelNames, filters: filters, wraps: wraps, vflips: vflips, format: p ? p.format : 'RGBA32F', selfRefChannels: (p && p.selfRefChannels) ? p.selfRefChannels : [] });
+	    passList.push({ id: id, src: src, channels: channels, channelNames: channelNames, filters: filters, wraps: wraps, vflips: vflips, format: p ? p.format : 'RGBA32F', selfRefChannels: selfRefChannels });
 	});
 
 	if (!passList.some(function(p) { return p.src.trim(); }))
@@ -665,7 +669,7 @@ function convert()
 		var volumeSamplers = [];
 		p.channels.forEach(function(kind, ci) { if (kind === 'volumeA' || kind === 'vol1' || kind === 'vol4') { volumeSamplers.push('iChannel' + ci); } });
 		p.channels.forEach(function(kind, ci) { if (!kind || kind === 'none') { emptySamplers.push('iChannel' + ci); } });
-		var result = transformGLSL(src, passMessages, passLabel, { cubemapSamplers: cubemapSamplers, volumeSamplers: volumeSamplers, emptySamplers: emptySamplers, cubemapPass: p.id === 'cubemapA', volumePass: p.id === 'volumeA' });
+		var result = transformGLSL(src, passMessages, passLabel, { cubemapSamplers: cubemapSamplers, volumeSamplers: volumeSamplers, emptySamplers: emptySamplers, cubemapPass: p.id === 'cubemapA', volumePass: p.id === 'volumeA', flipDerivatives: p.id === 'image' });
 		passMessages.forEach(function(m)
 		{
 			messages.push({ level: m.level, text: '[' + PASS_LABELS[p.id] + '] ' + m.text });
